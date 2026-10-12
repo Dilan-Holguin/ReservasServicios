@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Disposicion } from './componentes/Disposicion';
+import { ProveedorConsultas } from './consultas/ProveedorConsultas';
 import { RutaProtegida } from './componentes/RutaProtegida';
 import { Catalogo } from './paginas/Catalogo';
 import { DetalleServicio } from './paginas/DetalleServicio';
@@ -15,6 +16,7 @@ export function App() {
   return (
     <BrowserRouter>
       <ProveedorSesion>
+        <ProveedorConsultas>
         <Routes>
           <Route element={<Disposicion />}>
             <Route path="/" element={<Catalogo />} />
@@ -41,6 +43,7 @@ export function App() {
             <Route path="*" element={<NoEncontrada />} />
           </Route>
         </Routes>
+        </ProveedorConsultas>
       </ProveedorSesion>
     </BrowserRouter>
   );
