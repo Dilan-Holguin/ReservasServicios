@@ -72,6 +72,22 @@ sobre código que no cambió.
 semanales de Maven, npm y la imagen base del `Dockerfile`, y mensuales de las propias
 acciones de GitHub. La revisión de dependencias bloquea; Dependabot propone el parche.
 
+Dos reglas de convivencia que salieron de la primera ejecución, cuando abrió siete pull
+requests de una sola vez:
+
+- **Agrupado por ecosistema** (`groups`): todas las actualizaciones de un ecosistema
+  llegan en un solo PR. Sin esto, la primera corrida sobre un repositorio sin historial
+  de Dependabot abre un PR por dependencia y el tablero queda inutilizable.
+- **Los saltos de versión mayor quedan ignorados**, salvo en las propias acciones de
+  GitHub, que son el andamio del pipeline y no el producto. Un major no es una
+  actualización, es una migración, y se decide a mano: las dos propuestas que motivaron
+  la regla querían llevar la imagen base de Java 21 a 25 y TypeScript de 5 a 7, con el
+  `pom.xml` fijado en `java.version` 21.
+
+La contrapartida se asume a conciencia: si la corrección de una vulnerabilidad solo
+existe en una versión mayor, Dependabot no va a proponerla. La alerta igual aparece en
+**Security → Dependabot alerts**, y desde ahí se decide la migración.
+
 Los hallazgos quedan en la pestaña **Security → Code scanning** del repositorio. Esa
 pestaña, con sus alertas y su historial, es la evidencia del entregable: no hace falta
 redactar el inventario a mano.

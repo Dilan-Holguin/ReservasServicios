@@ -3,6 +3,20 @@ version: 2
 # Mantiene actualizadas las dependencias y la imagen base del contenedor.
 # Es la contraparte preventiva de la revisión de dependencias en CI: esta propone
 # el parche, aquella bloquea el PR que introduzca una vulnerabilidad.
+#
+# Dos reglas de convivencia, aprendidas de la primera ejecución:
+#
+# 1. `groups` junta todas las actualizaciones de un ecosistema en un solo PR. Sin
+#    esto, la primera corrida sobre un repositorio sin historial de Dependabot abre
+#    un PR por dependencia y el tablero queda inutilizable.
+# 2. Los saltos de versión mayor quedan ignorados en todos los ecosistemas salvo las
+#    propias acciones de GitHub. Un major no es una actualización: es una migración,
+#    y se decide a mano. El caso concreto que lo motivó fueron dos propuestas
+#    automáticas para pasar la imagen base de Java 21 a 25 y TypeScript de 5 a 7.
+#
+# Contrapartida asumida: si alguna vez la corrección de una vulnerabilidad solo
+# existe en una versión mayor, Dependabot no la va a proponer. La alerta igual
+# aparece en Security -> Dependabot alerts, y de ahí se decide la migración.
 
 updates:
   - package-ecosystem: maven
@@ -10,36 +24,61 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     commit-message:
       prefix: build
       include: scope
+    groups:
+      backend:
+        patterns: ['*']
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     commit-message:
       prefix: build
       include: scope
+    groups:
+      frontend:
+        patterns: ['*']
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
 
+  # Las acciones sí admiten majors: son el andamio del pipeline, no el producto, y
+  # el propio pipeline avisa cuando una versión queda obsoleta.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     commit-message:
       prefix: ci
       include: scope
+    groups:
+      acciones:
+        patterns: ['*']
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     commit-message:
       prefix: build
       include: scope
+    groups:
+      imagen-base:
+        patterns: ['*']
+    ignore:
+      # La versión de Java la fija el pom (java.version 21): cambiarla es una decisión
+      # de arquitectura, no un parche.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
