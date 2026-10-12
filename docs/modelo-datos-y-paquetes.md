@@ -1,6 +1,6 @@
-# Modelo de datos y paquetes — Sprint 1
+# Modelo de datos y paquetes — Sprints 1 y 2
 
-Diseño aprobado para implementar las HU-01 a HU-07 y HU-09. Consolida el esquema físico de PostgreSQL, la estructura de paquetes hexagonal y el contrato de la API. **Reemplaza a `docs/db.md` y al diagrama `paquetes_&_componentes`** como fuente de verdad; esos diagramas deben actualizarse a partir de este documento.
+Diseño aprobado para implementar las HU-01 a HU-07 y HU-09 (Sprint 1) y las HU-08, HU-10, HU-11, HU-14 y HU-15 (Sprint 2). Consolida el esquema físico de PostgreSQL, la estructura de paquetes hexagonal y el contrato de la API. **Reemplaza a `docs/db.md` y al diagrama `paquetes_&_componentes`** como fuente de verdad; esos diagramas deben actualizarse a partir de este documento.
 
 La plataforma es **agnóstica al negocio**: cualquier establecimiento (clínica, peluquería, gimnasio, academia) se registra como proveedor y configura sus propios servicios, agenda y recursos.
 
@@ -51,6 +51,8 @@ erDiagram
     tbl_reservas ||--|{ tbl_historial_reservas : ""
     tbl_estados ||--o{ tbl_historial_reservas : ""
     tbl_usuarios ||--o{ tbl_historial_reservas : ""
+    tbl_servicios ||--|{ tbl_historial_servicios : ""
+    tbl_usuarios ||--o{ tbl_historial_servicios : ""
 
     tbl_roles {
         int id PK
@@ -166,6 +168,15 @@ erDiagram
         int id_usuario FK
         timestamptz fecha_cambio
     }
+    tbl_historial_servicios {
+        int id PK
+        int id_servicio FK
+        varchar(30) tipo_cambio
+        text valor_anterior
+        text valor_nuevo
+        int id_usuario FK
+        timestamptz fecha_cambio
+    }
 ```
 
 ### 1.2 Diccionario de datos
@@ -222,6 +233,8 @@ Todas las PK son `integer generated always as identity`, salvo las tablas puente
 
 **`tbl_historial_reservas`**: `id_reserva`, `id_estado_anterior` (**nulo** en la creación), `id_estado_nuevo`, `id_usuario` (quién hizo el cambio), `fecha_cambio DEFAULT now()`.
 
+**`tbl_historial_servicios`** (HU-11, migración V3): `id_servicio`, `tipo_cambio varchar(30)` con `CHECK` sobre `CREACION`, `HORARIO_CREADO`, `HORARIO_EDITADO`, `HORARIO_ELIMINADO`, `RECURSOS_ASIGNADOS` y `ESTADO_CAMBIADO` (enum `TipoCambioServicio`), `valor_anterior text` (nulo al crear), `valor_nuevo text` (nulo al eliminar), `CHECK` de que al menos uno no sea nulo, `id_usuario` (quién hizo el cambio) y `fecha_cambio DEFAULT now()`. Los valores son descripciones legibles de lo que cambió (`"Lunes 08:00-12:00"`, `"Sala 1, Equipo 2"`, `"ACTIVO"`). `tipo_cambio` es un `CHECK` y no un catálogo con FK porque ninguna regla ni otra tabla depende de él y no tiene atributos propios. La migración genera el evento `CREACION` de los servicios que ya existían, fechado con el registro de su proveedor.
+
 ### 1.3 Datos semilla
 
 | Tabla | Valores |
@@ -244,6 +257,10 @@ Todas las PK son `integer generated always as identity`, salvo las tablas puente
 | `tbl_reservas_recursos (id_recurso)` | Conflictos de recurso (HU-09) |
 | `tbl_servicios (id_proveedor)`, `tbl_recursos (id_proveedor)` | Listados del proveedor |
 | `tbl_tokens_verificacion (id_usuario)` | Reenvío e invalidación de tokens |
+| `tbl_historial_reservas (id_reserva, fecha_cambio)` | Cambios de estado de las reservas consultadas en orden cronológico (HU-10, HU-14) |
+| `tbl_historial_servicios (id_servicio, fecha_cambio)` | Historial de los servicios de un proveedor en orden cronológico (HU-11) |
+
+Las búsquedas del historial de reservas usan los índices existentes: `(id_cliente, fecha_hora_inicio)` para el cliente (HU-10) y `(id_servicio, fecha_hora_inicio)` para el proveedor (HU-14).
 
 ### 1.5 Cambios frente a `docs/db.md`
 
@@ -261,6 +278,7 @@ Todas las PK son `integer generated always as identity`, salvo las tablas puente
 | `tbl_tipos_recurso`, `tbl_servicios_recursos`, `tbl_reservas_recursos` | Nuevas | HU-09 |
 | `tbl_historial_reservas` | Typo corregido; + `id_estado_nuevo`, `id_usuario`; `id_estado_anterior` opcional | El ERD dibujaba la relación con usuario sin columna |
 | `tbl_reservas` | + `creado_en` | Auditoría |
+| `tbl_historial_servicios` | Nueva (Sprint 2) | HU-11: trazabilidad de la oferta de cada servicio |
 
 ---
 
@@ -273,14 +291,14 @@ co.reservas
 ├── domain                          Java puro: entidades, value objects, reglas, excepciones
 │   ├── shared
 │   ├── usuario                     Usuario, Rol, EstadoUsuario, Cliente, Proveedor, PoliticaBloqueo
-│   ├── servicio                    Servicio, EstadoServicio
+│   ├── servicio                    Servicio, EstadoServicio, HistorialServicio, TipoCambioServicio
 │   ├── agenda                      HorarioDisponible, GeneradorTurnos, Turno
 │   ├── recurso                     Recurso
 │   └── reserva                     Reserva, EstadoReserva, HistorialReserva
 ├── application
-│   ├── port/in/<modulo>            Interfaces de casos de uso + comandos/resultados (records)
+│   ├── port/in/<modulo>            Interfaces de casos de uso + comandos/resultados (records); port/in/usuario: AutorCambio
 │   ├── port/out/<modulo>           Puertos de salida (*RepositoryPort, PasswordHasherPort, TokenEmisorPort, NotificacionPort)
-│   └── service/<modulo>            Implementación de los casos de uso
+│   └── service/<modulo>            Implementación de los casos de uso; service/usuario: AutoresCambio
 ├── adapters
 │   ├── in/web/<modulo>             Controllers REST + DTOs de request/response
 │   ├── in/web/error                ErrorResponse, GlobalExceptionHandler
@@ -324,11 +342,17 @@ Todos bajo `/api/v1`.
 | HU-07 | `ConsultarDisponibilidadUseCase` | `GET /servicios/{idServicio}/disponibilidad?desde=&hasta=` | Público |
 | HU-07, HU-09 | `CrearReservaUseCase` | `POST /reservas` | CLIENTE |
 | HU-07 | `ConsultarReservasUseCase` | `GET /reservas/mias` · `GET /servicios/{idServicio}/reservas` | CLIENTE · PROVEEDOR dueño |
+| HU-08 (Sprint 2) | `CancelarReservaUseCase` | `POST /reservas/{idReserva}/cancelacion` | CLIENTE dueño |
+| HU-15 (Sprint 2) | `CancelarReservaUseCase` | `POST /reservas/{idReserva}/cancelacion` (mismo endpoint) | PROVEEDOR dueño del servicio |
+| HU-10 (Sprint 2) | `ConsultarHistorialReservasUseCase` | `GET /reservas/historial?idServicio=&estado=&desde=&hasta=` · `GET /reservas/{idReserva}/historial` | CLIENTE (sus reservas) · CLIENTE dueño |
+| HU-14 (Sprint 2) | `ConsultarHistorialReservasUseCase` | Los mismos endpoints de HU-10 | PROVEEDOR (reservas de sus servicios) · PROVEEDOR dueño del servicio |
+| HU-11 (Sprint 2) | `ConsultarHistorialServiciosUseCase` | `GET /servicios/historial?idServicio=` | PROVEEDOR dueño |
+| HU-11 (Sprint 2) | `GestionarServiciosUseCase` | `PUT /servicios/{idServicio}/estado` | PROVEEDOR dueño |
 | HU-09 | `GestionarRecursosUseCase` | `POST /recursos` · `GET /recursos` · `PUT /servicios/{idServicio}/recursos` | PROVEEDOR |
 | Soporte | `GestionarServiciosUseCase` | `POST /servicios` (PROVEEDOR) · `GET /servicios` · `GET /servicios/{id}` (públicos) | — |
 | Soporte | `ConsultarCatalogosUseCase` | `GET /catalogos/categorias` · `/tipos-recurso` · `/tipos-documento` | Público |
 
-Componentes nuevos frente al diagrama original: `AuthController`, `ServicioController`, `RecursoController`, `CatalogoController`. Quedan fuera de este sprint: `CancelarReservaUseCase`, `GenerarReporteOcupacionUseCase` y `ReporteController`.
+Componentes nuevos frente al diagrama original: `AuthController`, `ServicioController`, `RecursoController`, `CatalogoController`. `CancelarReservaUseCase` se implementó en el Sprint 2 dentro de `ReservaController`; los historiales, en `HistorialReservaController` y `HistorialServicioController` (etiqueta Swagger "Historial"). Quedan pendientes `GenerarReporteOcupacionUseCase` y `ReporteController`.
 
 ---
 
@@ -351,10 +375,10 @@ Todas las respuestas de error (incluidas 401 y 403 de seguridad) usan el mismo c
 | 400 / 415 | `VALIDACION_FALLIDA` (details: `campo`, `mensaje`), `SOLICITUD_INVALIDA` (también para 415), `SERVICIO_REQUERIDO`, `TOKEN_VERIFICACION_INVALIDO` |
 | 401 | `NO_AUTENTICADO`, `CREDENCIALES_INVALIDAS` |
 | 403 | `ACCESO_DENEGADO`, `CUENTA_NO_VERIFICADA`, `CUENTA_INACTIVA` |
-| 404 | `SERVICIO_NO_ENCONTRADO`, `HORARIO_NO_ENCONTRADO`, `RECURSO_NO_ENCONTRADO`, `CATEGORIA_NO_ENCONTRADA`, `TIPO_RECURSO_NO_ENCONTRADO`, `RUTA_NO_ENCONTRADA` |
+| 404 | `SERVICIO_NO_ENCONTRADO`, `HORARIO_NO_ENCONTRADO`, `RECURSO_NO_ENCONTRADO`, `CATEGORIA_NO_ENCONTRADA`, `TIPO_RECURSO_NO_ENCONTRADO`, `RESERVA_NO_ENCONTRADA`, `RUTA_NO_ENCONTRADA` |
 | 405 | `METODO_NO_PERMITIDO` |
-| 409 | `EMAIL_YA_REGISTRADO`, `SERVICIO_YA_REGISTRADO`, `RECURSO_YA_REGISTRADO`, `HORARIO_SOLAPADO`, `HORARIO_CON_RESERVAS`, `TURNO_SIN_CUPO`, `RECURSO_NO_DISPONIBLE`, `RESERVA_SOLAPADA` |
-| 422 | `RESERVA_EN_EL_PASADO`, `HORARIO_NO_DISPONIBLE`, `SERVICIO_NO_DISPONIBLE`, `BLOQUE_MENOR_A_DURACION` |
+| 409 | `EMAIL_YA_REGISTRADO`, `SERVICIO_YA_REGISTRADO`, `RECURSO_YA_REGISTRADO`, `HORARIO_SOLAPADO`, `HORARIO_CON_RESERVAS`, `TURNO_SIN_CUPO`, `RECURSO_NO_DISPONIBLE`, `RESERVA_SOLAPADA`, `RESERVA_NO_CANCELABLE` |
+| 422 | `RESERVA_EN_EL_PASADO`, `CANCELACION_FUERA_DE_PLAZO`, `HORARIO_NO_DISPONIBLE`, `SERVICIO_NO_DISPONIBLE`, `BLOQUE_MENOR_A_DURACION` |
 | 423 | `CUENTA_BLOQUEADA` |
 | 500 | `ERROR_INTERNO` (sin detalles internos) |
 
@@ -407,6 +431,51 @@ Todas las respuestas de error (incluidas 401 y 403 de seguridad) usan el mismo c
 - Se crea en `CONFIRMADA`, con sus recursos y una fila de historial (`id_estado_anterior` nulo). Respuesta `201` con la reserva y sus recursos.
 - **Disponibilidad**: `desde`/`hasta` son fechas en la zona del proveedor, con un rango máximo de 31 días. Devuelve los turnos futuros con `cuposDisponibles > 0` y sin recursos ocupados.
 
+### HU-08 — Cancelar reserva (Sprint 2)
+- Sin cuerpo: `POST /reservas/{idReserva}/cancelacion`.
+- Validaciones, en orden:
+  1. Se bloquea la fila de la reserva (`FOR UPDATE`); si no existe → `404 RESERVA_NO_ENCONTRADA`. Bloquear solo la reserva evita cancelaciones dobles y su historial duplicado; como cancelar solo libera cupo y recursos, no compite con la creación de reservas.
+  2. Propiedad (ABAC): solo el cliente que hizo la reserva o el proveedor dueño del servicio; cualquier otro usuario, incluido `ADMIN` → `403 ACCESO_DENEGADO`.
+  3. Estado: `CANCELADA` o `COMPLETADA` → `409 RESERVA_NO_CANCELABLE`.
+  4. Tiempo: la reserva ya comenzó (`fechaHoraInicio <= ahora`) → `422 RESERVA_EN_EL_PASADO`.
+  5. Ventana mínima, **solo para el cliente**: faltan menos de 5 días para el inicio (`fechaHoraInicio < ahora + 5 días`) → `422 CANCELACION_FUERA_DE_PLAZO`. Con exactamente 5 días todavía se permite. El proveedor dueño puede cancelar hasta que la reserva comience (por ejemplo, si el profesional no puede atender). La regla vive en `PoliticaCancelacion` (dominio) y el plazo se configura con `CANCELACION_ANTICIPACION_MINIMA` (por defecto `5d`).
+- La reserva pasa a `CANCELADA` y se agrega una fila de historial con el estado anterior y el usuario que canceló. Como la disponibilidad, el cupo y los conflictos de recursos solo cuentan reservas `CONFIRMADA`, el turno y sus recursos quedan libres sin borrar filas de `tbl_reservas_recursos`.
+- Se registra el evento `RESERVA_CANCELADA` (id de reserva, servicio, usuario y rol). Respuesta `200` con la reserva actualizada.
+
+### HU-15 — Cancelar reserva como proveedor (Sprint 2)
+- Mismo caso de uso y endpoint que HU-08: la operación es idéntica y solo cambia quién la ejecuta, que se distingue por el rol del token. No se duplica lógica ni se crea otra ruta.
+- Permite al proveedor cancelar reservas de clientes en **sus propios servicios** ante situaciones que le impiden atender (falta de personal, de recursos o indisponibilidad).
+- Reglas: las mismas validaciones 1 a 4 de HU-08. **No aplica la ventana mínima** de 5 días (validación 5), así que el proveedor puede cancelar hasta que la reserva comience.
+- Un proveedor que no es dueño del servicio reservado → `403 ACCESO_DENEGADO`.
+- Efecto: la reserva queda `CANCELADA` (visible para el proveedor en `GET /servicios/{idServicio}/reservas` y para el cliente en `GET /reservas/mias`), se liberan su cupo y sus recursos, y el historial registra al proveedor como autor del cambio.
+
+### HU-10 — Historial de reservas del cliente (Sprint 2)
+- `GET /reservas/historial` con el token del cliente devuelve **sus** reservas, de la más reciente a la más antigua por `fechaHoraInicio` (empate: id descendente). Cada una trae su estado actual y `cambios`: las filas de `tbl_historial_reservas` en orden cronológico, con `estadoAnterior` (nulo en la creación), `estadoNuevo`, `realizadoPor` (`idUsuario`, `nombre`, `rol`; sin correo ni teléfono) y `fechaCambio`.
+- Filtros opcionales y combinables: `estado` (estado **actual** de la reserva), `desde` y `hasta` (fechas de inicio, inclusivas, en la zona del proveedor de cada reserva) e `idServicio`. `hasta` anterior a `desde` → `400 VALIDACION_FALLIDA`; un valor mal formado (por ejemplo `estado=PERDIDA`) → `400 SOLICITUD_INVALIDA`.
+- Como las reservas de un cliente pueden ser de proveedores con zonas distintas, la consulta SQL filtra con un margen de un día a cada lado (cubre cualquier desfase UTC) y la aplicación aplica el rango exacto con la fecha local de cada reserva.
+- Sin reservas → `200` con lista vacía.
+- Autorización: el endpoint solo devuelve reservas del cliente autenticado. `GET /reservas/{idReserva}/historial` de una reserva de otro cliente → `403 ACCESO_DENEGADO` (misma regla ABAC que la cancelación, `exigirAccesoAReserva`); inexistente → `404 RESERVA_NO_ENCONTRADA`. `ADMIN` → `403`.
+
+### HU-11 — Historial de servicios del proveedor (Sprint 2)
+- Eventos que se registran en `tbl_historial_servicios`, en la misma transacción del cambio:
+
+| `tipoCambio` | Origen | `valorAnterior` → `valorNuevo` |
+|--------------|--------|--------------------------------|
+| `CREACION` | Registro del proveedor (HU-02) o `POST /servicios` | — → `"Consulta · 30 min · capacidad 1"` |
+| `HORARIO_CREADO` | `POST /servicios/{id}/horarios`, una fila por bloque | — → `"Lunes 08:00-12:00"` |
+| `HORARIO_EDITADO` | `PUT /horarios/{id}` aplicado | bloque anterior → bloque nuevo |
+| `HORARIO_ELIMINADO` | `DELETE /horarios/{id}` aplicado | bloque eliminado → — |
+| `RECURSOS_ASIGNADOS` | `PUT /servicios/{id}/recursos`, solo si el conjunto cambia | `"Sin recursos"` o nombres ordenados → nombres nuevos |
+| `ESTADO_CAMBIADO` | `PUT /servicios/{id}/estado`, solo si el estado cambia | `ACTIVO` → `INACTIVO` o al revés |
+
+- `GET /servicios/historial` devuelve los cambios de **todos** los servicios del proveedor autenticado (activos o no) en orden cronológico (`fecha_cambio`, luego id), con `idServicio`, `nombreServicio`, `tipoCambio`, los valores, `realizadoPor` y `fechaCambio`. `?idServicio=` filtra por uno: inexistente → `404 SERVICIO_NO_ENCONTRADO`; de otro proveedor → `403 ACCESO_DENEGADO`. Un servicio recién creado muestra solo su evento `CREACION`.
+- **Cambio de estado del servicio** (`PUT /servicios/{idServicio}/estado`, cuerpo `{"estado": "INACTIVO"}`): bloquea la fila del servicio y verifica propiedad. Un servicio `INACTIVO` deja de aparecer en `GET /servicios` y no acepta reservas nuevas (`422 SERVICIO_NO_DISPONIBLE`); las reservas confirmadas se mantienen. Enviar el estado actual responde `200` sin registrar un cambio. Se registra el evento `SERVICIO_ESTADO_CAMBIADO` en el log.
+
+### HU-14 — Historial de reservas del negocio (Sprint 2)
+- Mismo caso de uso y endpoints que HU-10; el rol del token decide el alcance. Con el token del proveedor, `GET /reservas/historial` devuelve las reservas de **sus** servicios, hechas por cualquier cliente, con el mismo orden, formato y filtros. Los cambios muestran quién los hizo: el cliente que reservó o canceló, o el proveedor que canceló (HU-15).
+- `?idServicio=` de otro proveedor → `403 ACCESO_DENEGADO`; inexistente → `404 SERVICIO_NO_ENCONTRADO`. `GET /reservas/{idReserva}/historial` de una reserva de un servicio ajeno → `403 ACCESO_DENEGADO`.
+- Sin reservas en sus servicios → `200` con lista vacía.
+
 ### HU-09 — Controlar disponibilidad de recursos
 - La reserva ocupa **todos** los recursos activos asociados al servicio.
 - Los recursos se bloquean `FOR UPDATE` en orden de id (evita deadlocks).
@@ -420,8 +489,11 @@ Todas las respuestas de error (incluidas 401 y 403 de seguridad) usan el mismo c
 
 | Tema | Estado |
 |------|--------|
-| Cancelar reserva, reportes de ocupación | Fuera de este sprint |
+| Cancelar reserva por el cliente (HU-08) y por el proveedor (HU-15) | Implementadas en el Sprint 2 |
+| Historial de reservas del cliente (HU-10) y del negocio (HU-14), historial de servicios (HU-11) | Implementados en el Sprint 2. Sin paginación: las listas crecen con el uso y conviene paginarlas antes de producción |
+| Editar nombre, duración o capacidad de un servicio | Sin endpoint; cuando exista debe registrar su evento en `tbl_historial_servicios` |
+| Reportes de ocupación | Pendiente |
 | MFA para administradores, refresh tokens y revocación | Sprint 3 ("aseguramiento mediante tokens") |
 | Endpoints de excepciones de disponibilidad | Solo existe la tabla |
 | Procedimiento almacenado o trigger | Sprint 3 (Bases de Datos) |
-| Actualizar `docs/db.md` y el diagrama de paquetes | Hacerlo con este documento como fuente |
+| Actualizar `docs/db.md` y el diagrama de paquetes | Pendiente, hacerlo con este documento como fuente |

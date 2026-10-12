@@ -4,15 +4,20 @@ Backend REST para gestionar reservas de servicios en cualquier tipo de negocio (
 
 Proyecto académico de CodeF@ctory UdeA 2026-2, perfil de equipo avanzado. El diseño aprobado (modelo de datos, paquetes, endpoints, contrato de errores y reglas de negocio) está en [`docs/modelo-datos-y-paquetes.md`](docs/modelo-datos-y-paquetes.md).
 
-## Alcance del Sprint 1
+## Alcance implementado
 
-| HU | Funcionalidad |
-|----|---------------|
-| HU-01, HU-02 | Registro de clientes y de proveedores con sus servicios |
-| HU-03 | Verificación de cuenta por correo, inicio de sesión con JWT y bloqueo por intentos fallidos |
-| HU-04, HU-05, HU-06 | Crear, editar y eliminar bloques de agenda, con confirmación cuando afectan reservas |
-| HU-07 | Consultar disponibilidad y crear reservas |
-| HU-09 | Recursos compartidos entre servicios sin conflictos de uso |
+| Sprint | HU | Funcionalidad |
+|--------|----|---------------|
+| 1 | HU-01, HU-02 | Registro de clientes y de proveedores con sus servicios |
+| 1 | HU-03 | Verificación de cuenta por correo, inicio de sesión con JWT y bloqueo por intentos fallidos |
+| 1 | HU-04, HU-05, HU-06 | Crear, editar y eliminar bloques de agenda, con confirmación cuando afectan reservas |
+| 1 | HU-07 | Consultar disponibilidad y crear reservas |
+| 1 | HU-09 | Recursos compartidos entre servicios sin conflictos de uso |
+| 2 | HU-08 | El cliente cancela su reserva con al menos 5 días de anticipación, liberando su cupo y sus recursos |
+| 2 | HU-15 | El proveedor cancela una reserva de su negocio (falta de personal, recursos, etc.), sin ventana mínima, liberando su cupo y sus recursos |
+| 2 | HU-10 | El cliente consulta el historial de sus reservas, con cada cambio de estado, quién lo hizo y cuándo, filtrando por estado o fechas |
+| 2 | HU-11 | El proveedor consulta el historial de cambios de sus servicios (creación, agenda, recursos y estado), filtrando por servicio |
+| 2 | HU-14 | El proveedor consulta el historial de las reservas de su negocio, filtrando por servicio, estado o fechas |
 
 ## Tecnologías
 
@@ -93,7 +98,12 @@ Abra http://localhost:8081/swagger-ui.html con el stack de Compose en marcha.
 5. **HU-09**: `POST /recursos` (por ejemplo, "Consultorio 1") y `PUT /servicios/{idServicio}/recursos` con `{"idsRecursos":[id]}`.
 6. **HU-01 y HU-07**: registre y verifique un cliente (`rol: CLIENTE`), inicie sesión y autorice con su token. Consulte `GET /servicios/{idServicio}/disponibilidad?desde=AAAA-MM-DD&hasta=AAAA-MM-DD` y reserve un turno con `POST /reservas`. Repetir el mismo turno con otro cliente produce `409 TURNO_SIN_CUPO` con sugerencias; una hora fuera de la agenda produce `422 HORARIO_NO_DISPONIBLE`.
 7. **HU-05 y HU-06**: con el token del proveedor, `PUT /horarios/{id}` reduciendo el bloque para que excluya la reserva devuelve `409 HORARIO_CON_RESERVAS`; repita con `confirmar=true` para aplicarlo. `DELETE /horarios/{id}` funciona igual.
-8. Cinco contraseñas incorrectas seguidas bloquean la cuenta 15 minutos (`423 CUENTA_BLOQUEADA` aunque la contraseña sea correcta).
+8. **HU-08**: con el token del cliente que hizo la reserva, `POST /reservas/{idReserva}/cancelacion` sin cuerpo devuelve la reserva en estado `CANCELADA`, y el turno vuelve a aparecer en `GET /servicios/{idServicio}/disponibilidad`. Cancelarla de nuevo produce `409 RESERVA_NO_CANCELABLE`; otro cliente recibe `403 ACCESO_DENEGADO`; una reserva que ya comenzó produce `422 RESERVA_EN_EL_PASADO`; si faltan menos de 5 días, recibe `422 CANCELACION_FUERA_DE_PLAZO`; un id inexistente, `404 RESERVA_NO_ENCONTRADA`. Cada cancelación queda en `tbl_historial_reservas` con el estado anterior y el usuario que la hizo.
+9. **HU-15**: con el token del proveedor dueño del servicio, el mismo `POST /reservas/{idReserva}/cancelacion` cancela la reserva de un cliente aunque falten menos de 5 días. La reserva aparece `CANCELADA` en `GET /servicios/{idServicio}/reservas` y su turno y sus recursos quedan libres; un proveedor de otro negocio recibe `403 ACCESO_DENEGADO`.
+10. **HU-10**: con el token del cliente, `GET /reservas/historial` lista sus reservas de la más reciente a la más antigua, cada una con `cambios` (estado anterior, nuevo, `realizadoPor` y `fechaCambio`). Pruebe `?estado=CANCELADA` y `?desde=AAAA-MM-DD&hasta=AAAA-MM-DD`. `GET /reservas/{idReserva}/historial` de una reserva de otro cliente responde `403 ACCESO_DENEGADO`; un cliente sin reservas recibe `[]`.
+11. **HU-14**: con el token del proveedor, el mismo `GET /reservas/historial` lista las reservas de todos sus servicios; agregue `?idServicio=`, `?estado=` o fechas para filtrar. Un `idServicio` de otro proveedor responde `403 ACCESO_DENEGADO`.
+12. **HU-11**: con el token del proveedor, `GET /servicios/historial?idServicio=…` muestra la creación del servicio y, en orden, los bloques de agenda creados, editados o eliminados, los recursos asignados y los cambios de estado. Para generar uno, `PUT /servicios/{idServicio}/estado` con `{"estado":"INACTIVO"}` (el servicio deja de aceptar reservas) y luego `{"estado":"ACTIVO"}`. Sin `idServicio` incluye todos sus servicios; un servicio ajeno responde `403 ACCESO_DENEGADO`.
+13. Cinco contraseñas incorrectas seguidas bloquean la cuenta 15 minutos (`423 CUENTA_BLOQUEADA` aunque la contraseña sea correcta).
 
 ## Configuración
 
@@ -107,4 +117,5 @@ Abra http://localhost:8081/swagger-ui.html con el stack de Compose en marcha.
 | `APP_BASE_URL` | Base del enlace de verificación | obligatoria |
 | `APP_CORS_ALLOWED_ORIGINS` | Orígenes permitidos, separados por coma | ninguno |
 | `LOGIN_MAX_ATTEMPTS`, `LOGIN_LOCK_DURATION` | Política de bloqueo | `5`, `15m` |
+| `CANCELACION_ANTICIPACION_MINIMA` | Anticipación mínima con la que un cliente puede cancelar (`5d`, `48h`, `90m`…) | `5d` |
 | `PORT`, `SWAGGER_ENABLED` | Puerto HTTP y publicación de Swagger | `8080`, `true` |

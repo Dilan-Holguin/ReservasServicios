@@ -2,6 +2,7 @@ package co.reservas.application.service.reserva;
 
 import co.reservas.application.port.in.auth.UsuarioAutenticado;
 import co.reservas.application.port.in.recurso.RecursoResultado;
+import co.reservas.application.port.in.reserva.CancelarReservaUseCase;
 import co.reservas.application.port.in.reserva.ConsultarReservasUseCase;
 import co.reservas.application.port.in.reserva.CrearReservaComando;
 import co.reservas.application.port.in.reserva.CrearReservaUseCase;
@@ -18,6 +19,7 @@ import co.reservas.domain.agenda.GeneradorTurnos;
 import co.reservas.domain.recurso.DetectorConflictosRecursos;
 import co.reservas.domain.recurso.Recurso;
 import co.reservas.domain.reserva.HistorialReserva;
+import co.reservas.domain.reserva.PoliticaCancelacion;
 import co.reservas.domain.reserva.Reserva;
 import co.reservas.domain.servicio.Servicio;
 import co.reservas.domain.shared.CodigoError;
@@ -44,7 +46,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
-public class ReservaService implements CrearReservaUseCase, ConsultarReservasUseCase {
+public class ReservaService implements CrearReservaUseCase, ConsultarReservasUseCase, CancelarReservaUseCase {
 
     private static final Logger log = LoggerFactory.getLogger(ReservaService.class);
 
@@ -55,12 +57,14 @@ public class ReservaService implements CrearReservaUseCase, ConsultarReservasUse
     private final RecursoRepositoryPort recursos;
     private final CalculadoraDisponibilidad calculadora;
     private final VerificadorPropiedad verificador;
+    private final PoliticaCancelacion politicaCancelacion;
     private final Clock clock;
 
     @SuppressWarnings("java:S107")
     public ReservaService(ReservaRepositoryPort reservas, ServicioRepositoryPort servicios,
                           UsuarioRepositoryPort usuarios, AgendaRepositoryPort agenda, RecursoRepositoryPort recursos,
-                          CalculadoraDisponibilidad calculadora, VerificadorPropiedad verificador, Clock clock) {
+                          CalculadoraDisponibilidad calculadora, VerificadorPropiedad verificador,
+                          PoliticaCancelacion politicaCancelacion, Clock clock) {
         this.reservas = reservas;
         this.servicios = servicios;
         this.usuarios = usuarios;
@@ -68,6 +72,7 @@ public class ReservaService implements CrearReservaUseCase, ConsultarReservasUse
         this.recursos = recursos;
         this.calculadora = calculadora;
         this.verificador = verificador;
+        this.politicaCancelacion = politicaCancelacion;
         this.clock = clock;
     }
 
@@ -119,6 +124,33 @@ public class ReservaService implements CrearReservaUseCase, ConsultarReservasUse
                 .addKeyValue("idUsuario", usuario.idUsuario())
                 .log("Reserva creada");
         return mapear(reserva, servicio, contexto.zona(), indexar(recursosBloqueados));
+    }
+
+    /**
+     * Orden de validación: existencia (404), propiedad (403) y reglas de estado y tiempo (409, 422). La ventana de
+     * anticipación de {@link PoliticaCancelacion} solo aplica al cliente. Solo se bloquea la fila de la reserva, lo
+     * que evita cancelaciones dobles y su historial duplicado; cancelar únicamente libera cupo y recursos, así que no
+     * compite con {@link #crear}, que serializa por cliente, servicio y recursos.
+     */
+    @Override
+    @Transactional
+    public ReservaResultado cancelar(UsuarioAutenticado usuario, Integer idReserva) {
+        Reserva reserva = reservas.bloquearPorId(idReserva)
+                .orElseThrow(() -> new ExcepcionNegocio(CodigoError.RESERVA_NO_ENCONTRADA, "La reserva no existe."));
+        verificador.exigirAccesoAReserva(usuario, reserva);
+        Instant ahora = Instant.now(clock);
+        Reserva cancelada = reserva.cancelar(ahora, politicaCancelacion.anticipacionPara(usuario.rol()));
+        reservas.actualizarEstado(cancelada);
+        reservas.registrarHistorial(
+                HistorialReserva.cambioDeEstado(reserva.estado(), cancelada, usuario.idUsuario(), ahora));
+        log.atInfo()
+                .addKeyValue("evento", "RESERVA_CANCELADA")
+                .addKeyValue("idReserva", cancelada.id())
+                .addKeyValue("idServicio", cancelada.idServicio())
+                .addKeyValue("idUsuario", usuario.idUsuario())
+                .addKeyValue("rol", usuario.rol())
+                .log("Reserva cancelada");
+        return mapearTodas(List.of(cancelada)).getFirst();
     }
 
     @Override
