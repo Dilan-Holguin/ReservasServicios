@@ -23,20 +23,32 @@ flowchart LR
     S1 --> D
     S2 --> D
     D --> E[Merge a main]
-    E --> R[Render publica solo<br/>autoDeploy: true]
     E --> F{CI sobre main}
     F -->|conclusión: success| G[CD]
-    G --> I[Sondeo de /actuator/health<br/>hasta UP]
-    R --> I
+    G --> G1[POST despliegue<br/>API de Render]
+    G1 --> G2[Esperar estado live<br/>y leer el commit publicado]
+    G2 --> I[Comprobar /actuator/health]
 ```
 
-Render conserva el despliegue automático (`autoDeploy: true`): publica por su cuenta
-cada push a `main`, en paralelo con CI. Conviene tener claro lo que eso implica: **el
-despliegue no está condicionado al pipeline**. Si alguien mergea con CI en rojo, Render
-publica igual, y CD lo único que hará es dejar constancia de que el servicio quedó
-arriba o caído. Lo que de verdad protege `main` en este esquema es la regla de
-protección de rama de la sección 3: si no se puede mergear en rojo, no se puede
-desplegar en rojo.
+**El pipeline es el único que despliega**, y la razón es empírica. Los servicios de
+Render tienen `autoDeploy` activo, pero nunca se disparó un despliegue por un commit: en
+veinte días el historial mostró dos despliegues, ambos pedidos a mano o por API, mientras
+se pusheaba a la rama que esos servicios seguían. La cuenta de Render no recibe los
+eventos de push de GitHub, probablemente porque los servicios se crearon por API contra
+la URL pública del repositorio, sin la aplicación de GitHub de Render conectada: puede
+clonar y construir, pero no le llega el aviso.
+
+Eso dejó una lección que está grabada en el diseño de `cd.yml`: **la primera versión de
+este workflow solo consultaba `/actuator/health`, y daba verde mientras el servicio
+publicado corría código de tres semanas antes**. Un servicio vivo con una versión vieja
+responde `UP` igual que uno recién desplegado. La salud mide disponibilidad, no
+actualidad. Por eso ahora el despliegue se pide por la API de Render y se espera su
+estado real, con el commit publicado como evidencia; la salud quedó como comprobación
+final, no como la única.
+
+Como el despliegue cuelga del resultado de CI, `main` en rojo no llega a producción. La
+regla de protección de rama de la sección 3 sigue siendo necesaria, pero ahora refuerza
+al pipeline en vez de ser lo único que lo sostiene.
 
 ## 2. Los tres workflows
 
@@ -94,21 +106,33 @@ redactar el inventario a mano.
 
 ### `cd.yml` — Despliegue continuo
 
-No escucha pushes: escucha el **resultado** de CI (`workflow_run`). Tiene dos caminos:
+No escucha pushes: escucha el **resultado** de CI (`workflow_run`). Corre cuando CI
+concluye con `success` sobre `main`, y también a mano (`workflow_dispatch`) para
+redesplegar sin inventar un commit vacío. En los dos casos hace lo mismo, en tres pasos:
 
-| Disparo | Qué hace |
-|---------|----------|
-| Automático, cuando CI concluye con `success` sobre `main` | Sondea `/actuator/health` cada 20 segundos, hasta 30 veces, y exige `status: UP`. No dispara nada: de desplegar ya se encargó Render. |
-| Manual (`workflow_dispatch`) | Dispara los deploy hooks del backend y del frontend, y después verifica la salud. Sirve para redesplegar o volver a publicar sin inventar un commit vacío. |
+1. **Pide el despliegue** de cada servicio por la API de Render
+   (`POST /v1/services/{id}/deploys`), que devuelve el identificador del despliegue.
+2. **Espera el estado real** consultando ese despliegue cada 20 segundos, hasta 30
+   minutos, y exige que termine en `live`. Si termina en `build_failed`,
+   `update_failed`, `canceled` o `deactivated`, el trabajo falla.
+3. **Comprueba la salud** del backend en `/actuator/health`.
 
-Los hooks se usan solo en el camino manual, y eso es a propósito: con `autoDeploy: true`
-dispararlos también en el automático produciría **dos despliegues por cada merge**, que
-en el plan gratuito es tiempo de construcción regalado.
+El paso 2 es el que da la garantía, y el paso 3 por sí solo no la da: un servicio vivo
+corriendo una versión de hace tres semanas responde `UP` igual que uno recién
+desplegado. El resumen del trabajo publica el estado de cada servicio y el commit que
+quedó en producción, que es la evidencia de que lo desplegado es lo que se mergeó.
 
-Los diez minutos de margen del sondeo son necesarios porque el plan gratuito suspende el
-servicio por inactividad y el arranque en frío tarda cerca de un minuto. Se midió: la
-primera consulta no responde, y recién el tercer intento devuelve `UP`. Por eso el
-sondeo reintenta en lugar de consultar una sola vez.
+Render despliega la punta de la rama. Si alguien mergea entre que CI termina y CD
+arranca, la punta se movió y el commit publicado no coincide con el esperado: eso se
+informa como advertencia y no como fallo, porque ya viene otro despliegue en camino.
+
+La lógica vive en `.github/scripts/desplegar_render.py`, no incrustada en el YAML, para
+poder ejecutarla y probarla fuera del runner. No usa dependencias externas: solo la
+biblioteca estándar de Python.
+
+Los márgenes de reintento no son arbitrarios. El plan gratuito suspende el servicio por
+inactividad y el arranque en frío tarda cerca de un minuto: está medido, la primera
+consulta de salud no responde y recién el tercer intento devuelve `UP`.
 
 El trabajo usa el *environment* `produccion`: si más adelante quieren aprobación manual
 antes de publicar, se activa en la configuración del environment sin tocar el YAML.
@@ -121,23 +145,34 @@ En **Settings → Secrets and variables → Actions**:
 
 | Nombre | Tipo | Valor |
 |--------|------|-------|
-| `RENDER_DEPLOY_HOOK_API` | Secret | Deploy hook del servicio web del backend. Render: servicio → Settings → Deploy Hook → Copy. |
-| `RENDER_DEPLOY_HOOK_WEB` | Secret | Deploy hook del sitio estático del frontend. Opcional. |
-| `URL_SALUD_BACKEND` | Variable | URL de salud. Si no se define, el workflow usa `https://reservaya-vvke.onrender.com/actuator/health`. |
+| `RENDER_API_KEY` | Secret | Clave de la API de Render. Se crea en **Account Settings → API Keys**. Es la única credencial que CD necesita. |
+| `RENDER_SERVICIOS` | Variable | Opcional. Lista `nombre=idServicio` separada por comas. Si no se define, el workflow usa los identificadores de los servicios actuales. |
+| `URL_SALUD_BACKEND` | Variable | Opcional. URL de salud. Si no se define, el workflow usa `https://reservaya-vvke.onrender.com/actuator/health`. |
 
-El deploy hook es una URL con un token: es un secreto, nunca una variable.
+La clave de la API da acceso a toda la cuenta de Render, así que va como *secret* y
+nunca como variable. Los identificadores de servicio, en cambio, no son secretos: son
+visibles en la URL del panel, y tenerlos en el YAML documenta a qué se despliega.
+
+Los deploy hooks que se usaban antes ya no hacen falta: la API cumple la misma función y
+además devuelve el identificador del despliegue, que es lo que permite seguir su estado.
+Si quedaron cargados como secretos, se pueden borrar.
 
 ### Render
 
-No hay nada que cambiar: el despliegue automático queda activo
-(`autoDeploy: true` en `render.yaml`) y Render publica cada push a `main` por su cuenta.
-Los deploy hooks quedan configurados como secretos para el redespliegue manual.
+Los dos servicios deben seguir la rama `main`, que es la que CI valida:
 
-Si en algún momento quieren que el pipeline sea la única puerta a producción, el cambio
-es de dos pasos: `autoDeploy: false` en el blueprint, apagarlo también en el panel
-(servicio → **Settings → Build & Deploy → Auto-Deploy → No**, porque los servicios
-actuales se crearon a mano y no por blueprint), y quitar del workflow de CD la condición
-`if: github.event_name == 'workflow_dispatch'` de los dos pasos que disparan los hooks.
+| Servicio | Tipo | Rama |
+|----------|------|------|
+| `reservaya` | Web service (Docker) | `main` |
+| `reservaya-web` | Static site | `main` |
+
+Esto importa más de lo que parece. Durante el Sprint 2 los dos servicios siguieron la
+rama `feat/sprint1-backend-reservas` mientras el equipo mergeaba a `main`: lo desplegado
+no correspondía a nada de lo que se estaba revisando, y nadie lo notó porque el servicio
+respondía con salud.
+
+El `autoDeploy` del panel puede quedar como esté: el despliegue lo pide el pipeline por
+API, y como ese evento de push nunca llega a Render, no hay riesgo de despliegue doble.
 
 ### Protección de la rama `main`
 
