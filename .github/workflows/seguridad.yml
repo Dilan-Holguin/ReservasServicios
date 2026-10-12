@@ -1,0 +1,78 @@
+name: Seguridad
+
+# Identificación automática de vulnerabilidades (OWASP Top Ten):
+# - CodeQL: análisis estático del código Java y TypeScript (A01, A03, A07...).
+# - Revisión de dependencias: bloquea un PR que introduzca una dependencia
+#   con vulnerabilidad conocida (A06 — componentes vulnerables y desactualizados).
+# Los hallazgos quedan en la pestaña Security del repositorio, que sirve de
+# evidencia del entregable del sprint.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Barrido semanal: aparecen CVE nuevos sobre código que no cambió.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL — ${{ matrix.lenguaje }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        lenguaje: [java-kotlin, javascript-typescript]
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 21
+        if: matrix.lenguaje == 'java-kotlin'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.lenguaje }}
+          queries: security-and-quality
+
+      - name: Construir el proyecto
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analizar
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.lenguaje }}
+
+  dependencias:
+    name: Revisión de dependencias
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Comparar dependencias contra la base de avisos
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

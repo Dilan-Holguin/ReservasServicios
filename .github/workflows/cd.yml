@@ -1,0 +1,78 @@
+name: CD
+
+# Render tiene el despliegue automático activo (`autoDeploy: true`), así que publica
+# por su cuenta cada push a main. Este workflow cumple dos papeles:
+#   1. Automático: cuando CI termina en verde sobre main, verifica que el servicio
+#      desplegado responda con salud. Es la constancia de que el despliegue quedó bien.
+#   2. A pedido (`workflow_dispatch`): dispara el despliegue con los deploy hooks,
+#      útil para redesplegar o volver a publicar sin tener que hacer un commit vacío.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-produccion
+  cancel-in-progress: false
+
+jobs:
+  despliegue:
+    name: Despliegue y verificación en Render
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: produccion
+    steps:
+      - name: Disparar el despliegue del backend
+        # Solo en ejecuciones manuales: en el camino automático ya desplegó Render.
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_API }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "Falta el secreto RENDER_DEPLOY_HOOK_API." >&2
+            exit 1
+          fi
+          codigo=$(curl -sS -X POST "$HOOK" -o /dev/null -w '%{http_code}')
+          echo "Render respondió $codigo al disparar el backend."
+          [ "$codigo" = "200" ] || [ "$codigo" = "201" ]
+
+      - name: Disparar el despliegue del frontend
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_WEB }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK_WEB no está configurado; se omite el frontend."
+            exit 0
+          fi
+          codigo=$(curl -sS -X POST "$HOOK" -o /dev/null -w '%{http_code}')
+          echo "Render respondió $codigo al disparar el frontend."
+          [ "$codigo" = "200" ] || [ "$codigo" = "201" ]
+
+      - name: Esperar a que el backend reporte salud
+        env:
+          # Variable del repositorio; si no está, se usa el servicio actual.
+          URL_SALUD: ${{ vars.URL_SALUD_BACKEND || 'https://reservaya-vvke.onrender.com/actuator/health' }}
+        run: |
+          echo "Consultando $URL_SALUD"
+          for intento in $(seq 1 30); do
+            # 60 s por intento: el arranque en frío del plan gratuito tarda cerca de un minuto.
+            estado=$(curl -fsS --max-time 60 "$URL_SALUD" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","DESCONOCIDO"))' \
+              2>/dev/null || echo "SIN_RESPUESTA")
+            echo "Intento $intento: $estado"
+            if [ "$estado" = "UP" ]; then
+              echo "Backend verificado en $URL_SALUD" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "El backend no reportó UP después de 10 minutos." >&2
+          exit 1

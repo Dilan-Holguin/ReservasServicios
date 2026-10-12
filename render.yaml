@@ -8,6 +8,8 @@ services:
     plan: free
     region: oregon
     branch: main
+    # Render publica cada push a main; el workflow de CD verifica la salud después.
+    autoDeploy: true
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /actuator/health
