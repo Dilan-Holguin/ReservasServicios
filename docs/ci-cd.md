@@ -194,7 +194,7 @@ Los lineamientos exigen PR con al menos una aprobación y pipeline en verde. En
 
 - Require a pull request before merging, con 1 aprobación.
 - Require status checks to pass: `Backend — pruebas y cobertura`,
-  `Frontend — tipos y empaquetado`, `Imagen de contenedor`, `Revisión de dependencias`.
+  `Frontend — tipos, pruebas y empaquetado`, `Imagen de contenedor`, `Revisión de dependencias`.
 - Require branches to be up to date before merging.
 - Require conversation resolution before merging.
 
