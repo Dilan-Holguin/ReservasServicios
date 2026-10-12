@@ -17,3 +17,7 @@ target/
 
 # Logs
 *.log
+
+# Python (scripts de CI)
+__pycache__/
+*.pyc
