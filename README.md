@@ -105,6 +105,48 @@ Abra http://localhost:8081/swagger-ui.html con el stack de Compose en marcha.
 12. **HU-11**: con el token del proveedor, `GET /servicios/historial?idServicio=…` muestra la creación del servicio y, en orden, los bloques de agenda creados, editados o eliminados, los recursos asignados y los cambios de estado. Para generar uno, `PUT /servicios/{idServicio}/estado` con `{"estado":"INACTIVO"}` (el servicio deja de aceptar reservas) y luego `{"estado":"ACTIVO"}`. Sin `idServicio` incluye todos sus servicios; un servicio ajeno responde `403 ACCESO_DENEGADO`.
 13. Cinco contraseñas incorrectas seguidas bloquean la cuenta 15 minutos (`423 CUENTA_BLOQUEADA` aunque la contraseña sea correcta).
 
+## Despliegue (Render + Neon)
+
+La aplicación corre como contenedor en Render y la base de datos es PostgreSQL administrado en Neon.
+Se usa Neon en vez del PostgreSQL de Render porque la base gratuita de Render expira a los 30 días de creada.
+
+### 1. Base de datos en Neon
+
+1. Cree un proyecto en [Neon](https://neon.com) y copie la cadena de conexión.
+2. Traduzca esa cadena al formato JDBC, conservando `sslmode=require`:
+
+   ```
+   DB_URL=jdbc:postgresql://<host>.neon.tech/<base>?sslmode=require
+   DB_USERNAME=<usuario>
+   DB_PASSWORD=<contraseña>
+   ```
+
+No hay que crear tablas a mano: Flyway aplica las migraciones al arrancar la aplicación.
+
+### 2. Correo saliente
+
+Mailpit solo sirve en desarrollo. En producción configure un proveedor SMTP real
+(por ejemplo Resend, Brevo o Mailtrap); sin él no se envían los enlaces de verificación.
+
+### 3. Servicio en Render
+
+1. En Render elija **New > Blueprint** y apunte al repositorio: `render.yaml` define el servicio web,
+   el `healthCheckPath` y las variables de entorno.
+2. Render pedirá los valores marcados como `sync: false` (base de datos, SMTP, URLs) y generará
+   `JWT_SECRET` automáticamente.
+3. Tras el primer despliegue, ponga `APP_BASE_URL` con la URL pública que asignó Render
+   (por ejemplo `https://reservas-servicios.onrender.com`) y redespliegue, para que los enlaces
+   de verificación apunten al dominio correcto.
+4. `APP_CORS_ALLOWED_ORIGINS` debe listar los orígenes del frontend separados por coma.
+
+El contenedor escucha el puerto que indica la variable `PORT`, que Render inyecta.
+
+### Límites del plan gratuito
+
+- El servicio se suspende tras 15 minutos sin tráfico y tarda alrededor de un minuto en volver.
+  Antes de una demostración, conviene despertarlo con una petición a `/actuator/health`.
+- Cada espacio de trabajo dispone de 750 horas de instancia al mes.
+
 ## Configuración
 
 | Variable | Uso | Valor por defecto |
