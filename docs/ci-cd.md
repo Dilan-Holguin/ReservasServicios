@@ -130,6 +130,19 @@ La lógica vive en `.github/scripts/desplegar_render.py`, no incrustada en el YA
 poder ejecutarla y probarla fuera del runner. No usa dependencias externas: solo la
 biblioteca estándar de Python.
 
+**El despliegue se pide siempre con la caché de capas limpia**, y esto viene de un
+incidente concreto. El despliegue del commit `bd22d67` quedó en estado `live` mientras la
+aplicación servía el código del sprint anterior: 17 rutas en lugar de 22, y Flyway
+reportando «validated 2 migrations» con un esquema en versión 2 cuando el commit traía
+`V3__historial_servicios.sql`. Se verificó que el commit sí contenía la migración y los
+controladores nuevos, y que la construcción había usado el `Dockerfile` correcto; lo único
+que publicó el código correcto fue reconstruir sin caché, y ahí Flyway sí registró
+«Migrating schema "public" to version "3 - historial servicios"».
+
+El costo está medido y es nulo: la construcción con caché tardó 49 segundos y la limpia
+47. Entre no ahorrar nada y publicar una versión vieja sin darse cuenta, la elección es
+obvia.
+
 Los márgenes de reintento no son arbitrarios. El plan gratuito suspende el servicio por
 inactividad y el arranque en frío tarda cerca de un minuto: está medido, la primera
 consulta de salud no responde y recién el tercer intento devuelve `UP`.

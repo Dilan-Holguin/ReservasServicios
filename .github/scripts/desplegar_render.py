@@ -80,9 +80,17 @@ def _pedir(ruta: str, clave: str, cuerpo: dict | None = None) -> dict:
 
 
 def disparar(id_servicio: str, clave: str) -> str:
-    """Crea un despliegue y devuelve su identificador."""
+    """Crea un despliegue y devuelve su identificador.
+
+    Se pide siempre con la caché de capas limpia. No es paranoia: un despliegue del
+    commit bd22d67 quedó en estado `live` mientras la aplicación servía el código del
+    sprint anterior —17 rutas en lugar de 22 y dos migraciones de Flyway en lugar de
+    tres—, y volver a construir sin caché fue lo único que publicó el código correcto.
+    El costo medido es nulo: la construcción con caché tardó 49 segundos y la limpia 47.
+    Entre ahorrar nada y publicar código viejo, no hay elección.
+    """
     respuesta = _pedir(
-        f"/services/{id_servicio}/deploys", clave, {"clearCache": "do_not_clear"}
+        f"/services/{id_servicio}/deploys", clave, {"clearCache": "clear"}
     )
     return respuesta["id"]
 
