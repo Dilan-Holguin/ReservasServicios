@@ -30,6 +30,7 @@ export type CodigoError =
   | 'RECURSO_NO_ENCONTRADO'
   | 'CATEGORIA_NO_ENCONTRADA'
   | 'TIPO_RECURSO_NO_ENCONTRADO'
+  | 'RESERVA_NO_ENCONTRADA'
   | 'RUTA_NO_ENCONTRADA'
   | 'METODO_NO_PERMITIDO'
   | 'EMAIL_YA_REGISTRADO'
@@ -40,7 +41,9 @@ export type CodigoError =
   | 'TURNO_SIN_CUPO'
   | 'RECURSO_NO_DISPONIBLE'
   | 'RESERVA_SOLAPADA'
+  | 'RESERVA_NO_CANCELABLE'
   | 'RESERVA_EN_EL_PASADO'
+  | 'CANCELACION_FUERA_DE_PLAZO'
   | 'HORARIO_NO_DISPONIBLE'
   | 'SERVICIO_NO_DISPONIBLE'
   | 'BLOQUE_MENOR_A_DURACION'
@@ -156,6 +159,65 @@ export interface Reserva {
   fechaHoraFin: string;
   recursos: Recurso[];
   creadoEn: string;
+}
+
+/* ------------------------------------------------------ historiales (Sprint 2) */
+
+/** Autor de un cambio registrado en un historial. No trae datos de contacto. */
+export interface AutorCambio {
+  idUsuario: number;
+  nombre: string;
+  rol: Rol;
+}
+
+/** Transición de estado de una reserva. `estadoAnterior` es `null` en la creación. */
+export interface CambioEstadoReserva {
+  estadoAnterior: EstadoReserva | null;
+  estadoNuevo: EstadoReserva;
+  realizadoPor: AutorCambio;
+  fechaCambio: string;
+}
+
+/** Reserva con su estado actual y sus cambios en orden cronológico (HU-10, HU-14). */
+export interface HistorialReserva {
+  idReserva: number;
+  idServicio: number;
+  nombreServicio: string;
+  idCliente: number;
+  estado: EstadoReserva;
+  fechaHoraInicio: string;
+  fechaHoraFin: string;
+  creadoEn: string;
+  cambios: CambioEstadoReserva[];
+}
+
+export interface FiltroHistorialReservas {
+  idServicio?: number;
+  estado?: EstadoReserva;
+  /** Fecha `YYYY-MM-DD` inclusiva, interpretada en la zona del proveedor. */
+  desde?: string;
+  hasta?: string;
+}
+
+/** Tipos de cambio del historial de un servicio (HU-11). */
+export type TipoCambioServicio =
+  | 'CREACION'
+  | 'HORARIO_CREADO'
+  | 'HORARIO_EDITADO'
+  | 'HORARIO_ELIMINADO'
+  | 'RECURSOS_ASIGNADOS'
+  | 'ESTADO_CAMBIADO';
+
+/** Cambio en la oferta de un servicio (HU-11). */
+export interface CambioServicio {
+  id: number;
+  idServicio: number;
+  nombreServicio: string;
+  tipoCambio: TipoCambioServicio;
+  valorAnterior: string | null;
+  valorNuevo: string | null;
+  realizadoPor: AutorCambio;
+  fechaCambio: string;
 }
 
 export interface Sesion {
