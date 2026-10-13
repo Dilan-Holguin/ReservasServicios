@@ -76,7 +76,7 @@ jobs:
           if-no-files-found: warn
 
   frontend:
-    name: Frontend — tipos y empaquetado
+    name: Frontend — tipos, pruebas y empaquetado
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -98,6 +98,9 @@ jobs:
 
       - name: Verificar tipos
         run: npm run typecheck
+
+      - name: Pruebas unitarias y de integración
+        run: npm test
 
       - name: Empaquetar para producción
         run: npm run build

@@ -1,56 +1,32 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { listarCategorias, listarServicios } from '../api/api';
-import type { ElementoCatalogo, Servicio } from '../api/tipos';
 import { CajaError, Cargando, Vacio } from '../componentes/Estados';
+import { useCategorias } from '../consultas/useCatalogos';
+import { useParametrosUrl } from '../consultas/useParametrosUrl';
+import { useCatalogo } from '../consultas/useServicios';
 import { duracionLegible } from '../utiles/fechas';
 
 export function Catalogo() {
-  const [servicios, setServicios] = useState<Servicio[]>([]);
-  const [categorias, setCategorias] = useState<ElementoCatalogo[]>([]);
-  const [idCategoria, setIdCategoria] = useState<string>('');
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState<unknown>(null);
-  const [intento, setIntento] = useState(0);
+  const { leer, leerNumero, fijar } = useParametrosUrl();
+  const idCategoria = leer('categoria');
+
+  // El filtro vive en la URL: compartir el enlace comparte la categoría elegida.
+  const filtros = useMemo(() => {
+    const id = leerNumero('categoria');
+    return id === undefined ? {} : { idCategoria: id };
+  }, [leerNumero]);
+
+  const servicios = useCatalogo(filtros);
+  const categorias = useCategorias();
 
   useEffect(() => {
     document.title = 'Catálogo de servicios — ReservaYa';
   }, []);
 
-  // Las categorías alimentan el filtro: GET /catalogos/categorias.
-  useEffect(() => {
-    const control = new AbortController();
-    listarCategorias({ signal: control.signal })
-      .then(setCategorias)
-      .catch(() => setCategorias([]));
-    return () => control.abort();
-  }, []);
-
-  // El catálogo se recarga al cambiar el filtro: GET /servicios?idCategoria=
-  useEffect(() => {
-    const control = new AbortController();
-    setCargando(true);
-    setError(null);
-    listarServicios(
-      idCategoria ? { idCategoria: Number(idCategoria) } : {},
-      { signal: control.signal },
-    )
-      .then((datos) => {
-        setServicios(datos);
-        setCargando(false);
-      })
-      .catch((fallo: unknown) => {
-        if (control.signal.aborted) return;
-        setError(fallo);
-        setCargando(false);
-      });
-    return () => control.abort();
-  }, [idCategoria, intento]);
-
-  const reintentar = useCallback(() => setIntento((n) => n + 1), []);
-
   const nombreCategoria = (id: number) =>
-    categorias.find((categoria) => categoria.id === id)?.nombre ?? 'Sin categoría';
+    (categorias.data ?? []).find((categoria) => categoria.id === id)?.nombre ?? 'Sin categoría';
+
+  const lista = servicios.data ?? [];
 
   return (
     <div className="pagina">
@@ -73,10 +49,10 @@ export function Catalogo() {
               id="filtro-categoria"
               className="campo__control"
               value={idCategoria}
-              onChange={(evento) => setIdCategoria(evento.target.value)}
+              onChange={(evento) => fijar({ categoria: evento.target.value || null })}
             >
               <option value="">Todas las categorías</option>
-              {categorias.map((categoria) => (
+              {(categorias.data ?? []).map((categoria) => (
                 <option key={categoria.id} value={categoria.id}>
                   {categoria.nombre}
                 </option>
@@ -85,17 +61,17 @@ export function Catalogo() {
           </div>
         </div>
 
-        {cargando ? <Cargando mensaje="Cargando servicios…" /> : null}
+        {servicios.isPending ? <Cargando mensaje="Cargando servicios…" /> : null}
 
-        {!cargando && error ? (
+        {servicios.isError ? (
           <CajaError
-            error={error}
+            error={servicios.error}
             titulo="No se pudo cargar el catálogo"
-            onReintentar={reintentar}
+            onReintentar={() => void servicios.refetch()}
           />
         ) : null}
 
-        {!cargando && !error && servicios.length === 0 ? (
+        {servicios.isSuccess && lista.length === 0 ? (
           <Vacio
             titulo="Todavía no hay servicios para mostrar"
             detalle={
@@ -108,7 +84,7 @@ export function Catalogo() {
                 <button
                   type="button"
                   className="boton boton--secundario"
-                  onClick={() => setIdCategoria('')}
+                  onClick={() => fijar({ categoria: null })}
                 >
                   Ver todas las categorías
                 </button>
@@ -121,9 +97,9 @@ export function Catalogo() {
           />
         ) : null}
 
-        {!cargando && !error && servicios.length > 0 ? (
+        {lista.length > 0 ? (
           <ul className="rejilla" aria-label="Listado de servicios">
-            {servicios.map((servicio) => (
+            {lista.map((servicio) => (
               <li key={servicio.id}>
                 <article className="tarjeta">
                   <p className="tarjeta__proveedor">{servicio.nombreProveedor}</p>
@@ -136,7 +112,9 @@ export function Catalogo() {
                   <ul className="atributos">
                     <li>
                       <span className="atributos__clave">Categoría</span>
-                      <span className="atributos__valor">{nombreCategoria(servicio.idCategoria)}</span>
+                      <span className="atributos__valor">
+                        {nombreCategoria(servicio.idCategoria)}
+                      </span>
                     </li>
                     <li>
                       <span className="atributos__clave">Duración</span>

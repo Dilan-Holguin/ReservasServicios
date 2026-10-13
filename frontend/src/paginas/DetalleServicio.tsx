@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { consultarDisponibilidad, consultarServicio, crearReserva } from '../api/api';
 import { recursosEnConflicto, sugerenciasDeError } from '../api/cliente';
-import type { Disponibilidad, Servicio, SugerenciaTurno, TurnoDisponible } from '../api/tipos';
+import type { SugerenciaTurno, TurnoDisponible } from '../api/tipos';
 import { Anuncio, CajaError, Cargando, Vacio } from '../componentes/Estados';
+import { GrillaTurnos, type FilaDeDia } from '../componentes/GrillaTurnos';
+import { useDisponibilidad, useTurnosDesaparecidos } from '../consultas/useDisponibilidad';
+import { useParametrosUrl } from '../consultas/useParametrosUrl';
+import { useCrearReserva } from '../consultas/useReservas';
+import { useServicio } from '../consultas/useServicios';
 import { useSesion } from '../sesion/useSesion';
-import { useSesionExpirada } from '../sesion/useSesionExpirada';
 import {
   diaDeTurno,
   duracionLegible,
@@ -25,79 +28,38 @@ export function DetalleServicio() {
   const { token, sesion } = useSesion();
   const navegar = useNavigate();
   const ubicacion = useLocation();
-  const manejarSesionExpirada = useSesionExpirada();
+  const { leer, fijar } = useParametrosUrl();
 
-  const rangoInicial = useMemo(() => rangoProximosDias(7), []);
-  const [desde, setDesde] = useState(rangoInicial.desde);
-  const [hasta, setHasta] = useState(rangoInicial.hasta);
+  // El rango vive en la URL: el botón «atrás» deshace un cambio de fechas y el
+  // enlace copiado abre exactamente la misma semana de agenda.
+  const porDefecto = useMemo(() => rangoProximosDias(7), []);
+  const desde = leer('desde', porDefecto.desde);
+  const hasta = leer('hasta', porDefecto.hasta);
+  const rangoInvalido = Boolean(desde && hasta && desde > hasta);
 
-  const [servicio, setServicio] = useState<Servicio | null>(null);
-  const [errorServicio, setErrorServicio] = useState<unknown>(null);
-  const [cargandoServicio, setCargandoServicio] = useState(true);
-
-  const [disponibilidad, setDisponibilidad] = useState<Disponibilidad | null>(null);
-  const [errorDisponibilidad, setErrorDisponibilidad] = useState<unknown>(null);
-  const [cargandoTurnos, setCargandoTurnos] = useState(true);
-  const [intento, setIntento] = useState(0);
-
-  const [reservando, setReservando] = useState<string | null>(null);
-  const [errorReserva, setErrorReserva] = useState<unknown>(null);
-  const [exito, setExito] = useState<string | null>(null);
+  const servicio = useServicio(idServicio);
+  const disponibilidad = useDisponibilidad(idServicio, desde, hasta, { activo: !rangoInvalido });
+  const avisoTurnos = useTurnosDesaparecidos(disponibilidad.data);
+  const reserva = useCrearReserva(idServicio);
 
   const turnoPendiente = (ubicacion.state as EstadoNavegacion | null)?.turnoPendiente ?? null;
   const pendienteProcesado = useRef(false);
 
-  /* ------------------------------------------------------------ carga de datos */
-
   useEffect(() => {
-    if (!Number.isFinite(idServicio)) return;
-    const control = new AbortController();
-    setCargandoServicio(true);
-    setErrorServicio(null);
-    consultarServicio(idServicio, { signal: control.signal })
-      .then((datos) => {
-        setServicio(datos);
-        document.title = `${datos.nombre} — ReservaYa`;
-        setCargandoServicio(false);
-      })
-      .catch((fallo: unknown) => {
-        if (control.signal.aborted) return;
-        setErrorServicio(fallo);
-        setCargandoServicio(false);
-      });
-    return () => control.abort();
-  }, [idServicio]);
+    if (servicio.data) document.title = `${servicio.data.nombre} — ReservaYa`;
+  }, [servicio.data]);
 
-  const recargarTurnos = useCallback(() => setIntento((n) => n + 1), []);
-
-  useEffect(() => {
-    if (!Number.isFinite(idServicio) || !desde || !hasta || desde > hasta) return;
-    const control = new AbortController();
-    setCargandoTurnos(true);
-    setErrorDisponibilidad(null);
-    consultarDisponibilidad(idServicio, desde, hasta, { signal: control.signal })
-      .then((datos) => {
-        setDisponibilidad(datos);
-        setCargandoTurnos(false);
-      })
-      .catch((fallo: unknown) => {
-        if (control.signal.aborted) return;
-        setErrorDisponibilidad(fallo);
-        setDisponibilidad(null);
-        setCargandoTurnos(false);
-      });
-    return () => control.abort();
-  }, [idServicio, desde, hasta, intento]);
+  const zona = disponibilidad.data?.zonaHoraria ?? servicio.data?.zonaHoraria;
 
   /* ---------------------------------------------------------------- reservar */
 
   const reservar = useCallback(
-    async (fechaHoraInicio: string) => {
+    (fechaHoraInicio: string) => {
       if (!token || !sesion) {
         // Sin sesión: se envía a ingresar y se vuelve exactamente a este turno.
         navegar('/ingresar', {
           state: {
-            destino: `/servicios/${idServicio}`,
+            destino: `/servicios/${idServicio}?desde=${desde}&hasta=${hasta}`,
             turnoPendiente: fechaHoraInicio,
             aviso: 'Ingresa para confirmar la reserva del turno seleccionado.',
           },
@@ -105,54 +67,45 @@ export function DetalleServicio() {
         return;
       }
       if (sesion.rol !== 'CLIENTE') {
-        setErrorReserva(
-          new Error('Solo las cuentas de cliente pueden reservar turnos.'),
-        );
+        reserva.reset();
         return;
       }
-      setReservando(fechaHoraInicio);
-      setErrorReserva(null);
-      setExito(null);
-      try {
-        const reserva = await crearReserva(token, idServicio, fechaHoraInicio);
-        setExito(
-          `Reserva confirmada para el ${fechaLarga(reserva.fechaHoraInicio, disponibilidad?.zonaHoraria)} a las ${soloHora(reserva.fechaHoraInicio, disponibilidad?.zonaHoraria)}.`,
-        );
-        recargarTurnos();
-      } catch (fallo: unknown) {
-        if (!manejarSesionExpirada(fallo)) setErrorReserva(fallo);
-      } finally {
-        setReservando(null);
-      }
+      reserva.mutate(fechaHoraInicio);
     },
-    [token, sesion, navegar, idServicio, disponibilidad?.zonaHoraria, recargarTurnos, manejarSesionExpirada],
+    [token, sesion, navegar, idServicio, desde, hasta, reserva],
   );
 
   // Turno guardado antes de ingresar: se confirma al volver con sesión activa.
   useEffect(() => {
     if (!turnoPendiente || pendienteProcesado.current || !token) return;
     pendienteProcesado.current = true;
-    navegar(ubicacion.pathname, { replace: true, state: null });
-    void reservar(turnoPendiente);
-  }, [turnoPendiente, token, reservar, navegar, ubicacion.pathname]);
+    navegar(`${ubicacion.pathname}${ubicacion.search}`, { replace: true, state: null });
+    reservar(turnoPendiente);
+  }, [turnoPendiente, token, reservar, navegar, ubicacion.pathname, ubicacion.search]);
 
   /* ---------------------------------------------------------------- agrupado */
 
-  const porDia = useMemo(() => {
-    if (!disponibilidad) return [];
+  const filas: FilaDeDia[] = useMemo(() => {
+    if (!disponibilidad.data) return [];
     const mapa = new Map<string, TurnoDisponible[]>();
-    for (const turno of disponibilidad.turnos) {
-      const clave = diaDeTurno(turno.fechaHoraInicio, disponibilidad.zonaHoraria);
+    for (const turno of disponibilidad.data.turnos) {
+      const clave = diaDeTurno(turno.fechaHoraInicio, disponibilidad.data.zonaHoraria);
       const lista = mapa.get(clave);
       if (lista) lista.push(turno);
       else mapa.set(clave, [turno]);
     }
-    return [...mapa.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [disponibilidad]);
+    return [...mapa.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([dia, turnos]) => ({ dia, turnos }));
+  }, [disponibilidad.data]);
 
-  const sugerencias: SugerenciaTurno[] = sugerenciasDeError(errorReserva);
-  const conflictos = recursosEnConflicto(errorReserva);
-  const rangoInvalido = Boolean(desde && hasta && desde > hasta);
+  const sugerencias: SugerenciaTurno[] = sugerenciasDeError(reserva.error);
+  const conflictos = recursosEnConflicto(reserva.error);
+  const esCliente = !sesion || sesion.rol === 'CLIENTE';
+
+  const exito = reserva.data
+    ? `Reserva confirmada para el ${fechaLarga(reserva.data.fechaHoraInicio, zona)} a las ${soloHora(reserva.data.fechaHoraInicio, zona)}.`
+    : null;
 
   if (!Number.isFinite(idServicio)) {
     return (
@@ -174,55 +127,69 @@ export function DetalleServicio() {
     <div className="pagina">
       <p className="migas">
         <Link to="/">Catálogo</Link> <span aria-hidden="true">›</span>{' '}
-        {servicio ? servicio.nombre : 'Servicio'}
+        {servicio.data ? servicio.data.nombre : 'Servicio'}
       </p>
 
-      {cargandoServicio ? <Cargando mensaje="Cargando el servicio…" /> : null}
+      {servicio.isPending ? <Cargando mensaje="Cargando el servicio…" /> : null}
 
-      {!cargandoServicio && errorServicio ? (
-        <CajaError error={errorServicio} titulo="No se pudo cargar el servicio" />
+      {servicio.isError ? (
+        <CajaError
+          error={servicio.error}
+          titulo="No se pudo cargar el servicio"
+          onReintentar={() => void servicio.refetch()}
+        />
       ) : null}
 
-      {servicio ? (
+      {servicio.data ? (
         <>
           <section className="ficha" aria-labelledby="titulo-servicio">
-            <p className="tarjeta__proveedor">{servicio.nombreProveedor}</p>
-            <h1 id="titulo-servicio">{servicio.nombre}</h1>
-            {servicio.descripcion ? <p className="ficha__descripcion">{servicio.descripcion}</p> : null}
+            <p className="tarjeta__proveedor">{servicio.data.nombreProveedor}</p>
+            <h1 id="titulo-servicio">{servicio.data.nombre}</h1>
+            {servicio.data.descripcion ? (
+              <p className="ficha__descripcion">{servicio.data.descripcion}</p>
+            ) : null}
             <ul className="atributos atributos--fila">
               <li>
                 <span className="atributos__clave">Duración</span>
-                <span className="atributos__valor">{duracionLegible(servicio.duracionMinutos)}</span>
+                <span className="atributos__valor">
+                  {duracionLegible(servicio.data.duracionMinutos)}
+                </span>
               </li>
               <li>
                 <span className="atributos__clave">Cupos por turno</span>
-                <span className="atributos__valor">{servicio.capacidad}</span>
+                <span className="atributos__valor">{servicio.data.capacidad}</span>
               </li>
               <li>
                 <span className="atributos__clave">Zona horaria</span>
-                <span className="atributos__valor">{servicio.zonaHoraria}</span>
+                <span className="atributos__valor">{servicio.data.zonaHoraria}</span>
               </li>
               <li>
                 <span className="atributos__clave">Estado</span>
-                <span className="atributos__valor">{servicio.estado}</span>
+                <span className="atributos__valor">
+                  <span className={`insignia insignia--${servicio.data.estado.toLowerCase()}`}>
+                    {servicio.data.estado}
+                  </span>
+                </span>
               </li>
             </ul>
           </section>
 
+          {servicio.data.estado === 'INACTIVO' ? (
+            <p className="estado estado--aviso" role="status">
+              Este servicio está inactivo: no acepta reservas nuevas. Las reservas ya confirmadas se
+              mantienen.
+            </p>
+          ) : null}
+
           <section aria-labelledby="titulo-disponibilidad">
             <h2 id="titulo-disponibilidad">Disponibilidad</h2>
             <p className="texto-apoyo">
-              Los horarios se muestran en la zona del proveedor ({servicio.zonaHoraria}). El rango
-              máximo de consulta es de 31 días.
+              Los horarios se muestran en la zona del proveedor ({servicio.data.zonaHoraria}). El
+              rango máximo de consulta es de 31 días. La lista se actualiza sola cada medio minuto
+              mientras esta pestaña está a la vista.
             </p>
 
-            <form
-              className="rango"
-              onSubmit={(evento) => {
-                evento.preventDefault();
-                recargarTurnos();
-              }}
-            >
+            <div className="rango">
               <div className="campo campo--compacto">
                 <label className="campo__etiqueta" htmlFor="rango-desde">
                   Desde
@@ -233,7 +200,7 @@ export function DetalleServicio() {
                   type="date"
                   value={desde}
                   min={hoyISO()}
-                  onChange={(evento) => setDesde(evento.target.value)}
+                  onChange={(evento) => fijar({ desde: evento.target.value })}
                 />
               </div>
               <div className="campo campo--compacto">
@@ -246,13 +213,18 @@ export function DetalleServicio() {
                   type="date"
                   value={hasta}
                   min={desde || hoyISO()}
-                  onChange={(evento) => setHasta(evento.target.value)}
+                  onChange={(evento) => fijar({ hasta: evento.target.value })}
                 />
               </div>
-              <button type="submit" className="boton boton--principal">
-                Actualizar disponibilidad
+              <button
+                type="button"
+                className="boton boton--secundario"
+                onClick={() => void disponibilidad.refetch()}
+                disabled={disponibilidad.isFetching}
+              >
+                {disponibilidad.isFetching ? 'Actualizando…' : 'Actualizar ahora'}
               </button>
-            </form>
+            </div>
 
             {rangoInvalido ? (
               <p className="estado estado--error" role="alert">
@@ -267,8 +239,18 @@ export function DetalleServicio() {
               </p>
             ) : null}
 
-            {errorReserva ? (
-              <CajaError error={errorReserva} titulo="No se pudo crear la reserva">
+            {/* El sondeo puede quitar un turno de la pantalla sin que nadie lo toque: se
+                anuncia para que el cambio no sea invisible, y menos para un lector de pantalla. */}
+            <Anuncio mensaje={avisoTurnos} />
+
+            {!esCliente ? (
+              <p className="estado estado--aviso" role="status">
+                Tu cuenta es de proveedor: solo las cuentas de cliente pueden reservar turnos.
+              </p>
+            ) : null}
+
+            {reserva.isError ? (
+              <CajaError error={reserva.error} titulo="No se pudo crear la reserva">
                 {conflictos.length > 0 ? (
                   <p className="estado__detalle">
                     Recursos ocupados: {conflictos.map((recurso) => recurso.nombre).join(', ')}.
@@ -285,12 +267,11 @@ export function DetalleServicio() {
                           <button
                             type="button"
                             className="boton boton--sugerencia"
-                            disabled={reservando !== null}
-                            onClick={() => void reservar(sugerencia.fechaHoraInicio)}
+                            disabled={reserva.isPending}
+                            onClick={() => reservar(sugerencia.fechaHoraInicio)}
                           >
-                            Reservar el{' '}
-                            {fechaLarga(sugerencia.fechaHoraInicio, disponibilidad?.zonaHoraria)} a las{' '}
-                            {soloHora(sugerencia.fechaHoraInicio, disponibilidad?.zonaHoraria)}
+                            Reservar el {fechaLarga(sugerencia.fechaHoraInicio, zona)} a las{' '}
+                            {soloHora(sugerencia.fechaHoraInicio, zona)}
                           </button>
                         </li>
                       ))}
@@ -300,57 +281,32 @@ export function DetalleServicio() {
               </CajaError>
             ) : null}
 
-            {cargandoTurnos ? <Cargando mensaje="Consultando turnos…" /> : null}
+            {disponibilidad.isPending ? <Cargando mensaje="Consultando turnos…" /> : null}
 
-            {!cargandoTurnos && errorDisponibilidad ? (
+            {disponibilidad.isError ? (
               <CajaError
-                error={errorDisponibilidad}
+                error={disponibilidad.error}
                 titulo="No se pudo consultar la disponibilidad"
-                onReintentar={recargarTurnos}
+                onReintentar={() => void disponibilidad.refetch()}
               />
             ) : null}
 
-            {!cargandoTurnos && !errorDisponibilidad && porDia.length === 0 ? (
+            {disponibilidad.isSuccess && filas.length === 0 ? (
               <Vacio
                 titulo="No hay turnos disponibles en este rango"
                 detalle="Prueba con otras fechas: la agenda del proveedor puede no cubrir los días elegidos o los cupos ya están tomados."
               />
             ) : null}
 
-            {!cargandoTurnos && !errorDisponibilidad && porDia.length > 0
-              ? porDia.map(([dia, turnos]) => (
-                  <section className="dia" key={dia} aria-labelledby={`dia-${dia}`}>
-                    <h3 className="dia__titulo" id={`dia-${dia}`}>
-                      {fechaLarga(turnos[0].fechaHoraInicio, disponibilidad?.zonaHoraria)}
-                    </h3>
-                    <ul className="turnos">
-                      {turnos.map((turno) => (
-                        <li key={turno.fechaHoraInicio}>
-                          <button
-                            type="button"
-                            className="turno"
-                            disabled={reservando !== null}
-                            aria-busy={reservando === turno.fechaHoraInicio}
-                            onClick={() => void reservar(turno.fechaHoraInicio)}
-                          >
-                            <span className="turno__hora">
-                              {soloHora(turno.fechaHoraInicio, disponibilidad?.zonaHoraria)}
-                            </span>
-                            <span className="turno__cupos">
-                              {turno.cuposDisponibles === 1
-                                ? '1 cupo libre'
-                                : `${turno.cuposDisponibles} cupos libres`}
-                            </span>
-                            <span className="turno__accion">
-                              {reservando === turno.fechaHoraInicio ? 'Reservando…' : 'Reservar'}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ))
-              : null}
+            {filas.length > 0 ? (
+              <GrillaTurnos
+                filas={filas}
+                zonaHoraria={zona}
+                enVuelo={reserva.isPending ? (reserva.variables ?? null) : null}
+                idEtiqueta="titulo-disponibilidad"
+                onElegir={reservar}
+              />
+            ) : null}
           </section>
         </>
       ) : null}

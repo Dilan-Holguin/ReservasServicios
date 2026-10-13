@@ -1,10 +1,14 @@
 import { peticion } from './cliente';
 import type {
   CambioHorario,
+  CambioServicio,
   DatosRegistro,
   Disponibilidad,
   ElementoCatalogo,
   EliminacionHorario,
+  EstadoServicio,
+  FiltroHistorialReservas,
+  HistorialReserva,
   Horario,
   Mensaje,
   NuevoServicio,
@@ -181,4 +185,68 @@ export function listarReservasDeServicio(
   o: Aborto = {},
 ): Promise<Reserva[]> {
   return peticion<Reserva[]>(`/servicios/${idServicio}/reservas`, { ...o, token });
+}
+
+/**
+ * Cancela una reserva (HU-08 cliente, HU-15 proveedor; es el mismo endpoint).
+ *
+ * El backend decide si procede: el cliente necesita la anticipación mínima
+ * (`CANCELACION_FUERA_DE_PLAZO`), el proveedor no. También rechaza una reserva ya
+ * cancelada o completada (`RESERVA_NO_CANCELABLE`) y una que ya empezó
+ * (`RESERVA_EN_EL_PASADO`).
+ */
+export function cancelarReserva(token: string, idReserva: number): Promise<Reserva> {
+  return peticion<Reserva>(`/reservas/${idReserva}/cancelacion`, { metodo: 'POST', token });
+}
+
+/* ------------------------------------------------------------- historiales */
+
+/** Historial de reservas: las propias para un CLIENTE, las de sus servicios para un PROVEEDOR. */
+export function consultarHistorialReservas(
+  token: string,
+  filtros: FiltroHistorialReservas = {},
+  o: Aborto = {},
+): Promise<HistorialReserva[]> {
+  const parametros = new URLSearchParams();
+  if (filtros.idServicio !== undefined) parametros.set('idServicio', String(filtros.idServicio));
+  if (filtros.estado) parametros.set('estado', filtros.estado);
+  if (filtros.desde) parametros.set('desde', filtros.desde);
+  if (filtros.hasta) parametros.set('hasta', filtros.hasta);
+  const consulta = parametros.toString();
+  return peticion<HistorialReserva[]>(
+    `/reservas/historial${consulta ? `?${consulta}` : ''}`,
+    { ...o, token },
+  );
+}
+
+/** Historial de una sola reserva, con todos sus cambios de estado. */
+export function consultarHistorialReserva(
+  token: string,
+  idReserva: number,
+  o: Aborto = {},
+): Promise<HistorialReserva> {
+  return peticion<HistorialReserva>(`/reservas/${idReserva}/historial`, { ...o, token });
+}
+
+/** Historial de cambios de los servicios del proveedor (HU-11). */
+export function consultarHistorialServicios(
+  token: string,
+  idServicio?: number,
+  o: Aborto = {},
+): Promise<CambioServicio[]> {
+  const consulta = idServicio === undefined ? '' : `?idServicio=${idServicio}`;
+  return peticion<CambioServicio[]>(`/servicios/historial${consulta}`, { ...o, token });
+}
+
+/** Activa o inactiva un servicio. Un servicio INACTIVO no acepta reservas nuevas. */
+export function cambiarEstadoServicio(
+  token: string,
+  idServicio: number,
+  estado: EstadoServicio,
+): Promise<Servicio> {
+  return peticion<Servicio>(`/servicios/${idServicio}/estado`, {
+    metodo: 'PUT',
+    cuerpo: { estado },
+    token,
+  });
 }
