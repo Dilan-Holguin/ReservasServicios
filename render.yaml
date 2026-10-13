@@ -41,8 +41,17 @@ services:
       # y producción corría 1025 con MAIL_HOST localhost. Nadie lo notó porque
       # nada compara las dos cosas. Si cambiás algo acá, cambialo también en el
       # panel hasta que los servicios se adopten en el blueprint.
+      # OJO con el nombre: tiene que ser el de sendinblue, no el de brevo.
+      # El certificado que sirve smtp-relay.brevo.com:587 vale solo para
+      # smtp-relay-offshore-southamerica-east-v2.sendinblue.com y
+      # smtp-relay.sendinblue.com. El nombre nuevo NO está en el certificado, así
+      # que cualquier cliente que valide el nombre durante STARTTLS —Java lo hace—
+      # corta el handshake antes de autenticar. El síntoma es MailSendException y
+      # cero eventos del lado de Brevo, porque la sesión nunca llega a enviar.
+      # Verificado el 2026-10-13 contra la misma IP (1.179.117.2) con los dos
+      # nombres: sendinblue autentica y acepta el mensaje, brevo falla el TLS.
       - key: MAIL_HOST
-        value: smtp-relay.brevo.com
+        value: smtp-relay.sendinblue.com
       - key: MAIL_PORT
         value: "587"
       # Credenciales SMTP del proveedor: se ponen a mano, nunca en el repositorio.

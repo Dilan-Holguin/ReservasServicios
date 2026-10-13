@@ -61,7 +61,7 @@ evaluador se registra con su propio correo.
 
 | Variable | Valor |
 |----------|-------|
-| `MAIL_HOST` | `smtp-relay.brevo.com` |
+| `MAIL_HOST` | `smtp-relay.sendinblue.com` ← **no** `smtp-relay.brevo.com`, ver abajo |
 | `MAIL_PORT` | `587` |
 | `MAIL_SMTP_AUTH` | `true` |
 | `MAIL_SMTP_STARTTLS` | `true` |
@@ -89,6 +89,43 @@ mismo síntoma —el correo no llega— con causas distintas:
 La lección: los valores de desarrollo no son neutros. `false` y `false` eran
 correctos para Mailpit y son veneno para un relay real, y no fallan al arrancar
 —fallan al enviar, en silencio.
+
+### El nombre del relay: `sendinblue`, no `brevo`
+
+Brevo documenta `smtp-relay.brevo.com`, y **ese nombre no funciona** con un
+cliente que valide el certificado. El relay presenta un certificado emitido para
+otros nombres:
+
+```
+subject = CN=smtp-relay-offshore-southamerica-east-v2.sendinblue.com
+SAN     = smtp-relay-offshore-southamerica-east-v2.sendinblue.com,
+          smtp-relay.sendinblue.com
+```
+
+`smtp-relay.brevo.com` no está en la lista. Jakarta Mail valida el nombre del
+servidor durante STARTTLS, así que el handshake se corta **antes** de autenticar.
+
+El síntoma es engañoso: `MailSendException` —no `MailAuthenticationException`, las
+credenciales nunca se usan— y **cero eventos** en el panel de Brevo, porque la
+sesión nunca llegó a entregar el mensaje. Parece un problema de credenciales o de
+remitente y no es ninguno de los dos.
+
+Comprobado el 2026-10-13 contra la misma IP (`1.179.117.2`, red `FR-MAILINBLUE`)
+con los dos nombres:
+
+| Host | Resultado |
+|------|-----------|
+| `smtp-relay.sendinblue.com` | STARTTLS OK → autenticación OK → mensaje aceptado |
+| `smtp-relay.brevo.com` | `Hostname mismatch, certificate is not valid` |
+
+Es un defecto del lado de Brevo —su certificado no cubre su propia marca nueva—
+pero la solución de nuestro lado es usar el nombre heredado, que sigue activo y sí
+está en el certificado.
+
+> Lo que **no** hay que hacer es desactivar la validación del certificado con
+> `mail.smtp.ssl.trust=*`. Eso convierte un problema de nombre en un agujero:
+> cualquiera que intercepte la conexión podría presentar su propio certificado y
+> leer las credenciales SMTP en claro.
 
 ### La lista blanca de IPs de Brevo
 
