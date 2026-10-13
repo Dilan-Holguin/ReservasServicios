@@ -34,7 +34,33 @@ public class NotificadorVerificacionCuenta {
                     .addKeyValue("evento", "CORREO_VERIFICACION_FALLIDO")
                     .addKeyValue("idUsuario", evento.idUsuario())
                     .addKeyValue("causa", e.getClass().getSimpleName())
+                    .addKeyValue("detalle", detalleRaiz(e))
                     .log("No se pudo enviar el correo de verificación; el usuario puede solicitar un reenvío");
         }
+    }
+
+    /**
+     * Mensaje de la causa más profunda, que es donde el servidor SMTP explica el rechazo.
+     *
+     * Registrar solo {@code getClass().getSimpleName()} no alcanzó: un fallo real de Brevo
+     * quedó como «MailSendException» y hubo que reproducir el envío por fuera para
+     * descubrir que la cuenta tenía lista blanca de IPs. El nombre de la clase dice que
+     * algo falló; el mensaje del servidor dice por qué, y es lo único que ahorra el viaje.
+     *
+     * No incluye credenciales: las respuestas SMTP de rechazo traen el remitente y el
+     * motivo, nunca la contraseña con la que se autenticó la sesión.
+     */
+    private static String detalleRaiz(Throwable error) {
+        Throwable actual = error;
+        while (actual.getCause() != null && actual.getCause() != actual) {
+            actual = actual.getCause();
+        }
+        String mensaje = actual.getMessage();
+        String descripcion = mensaje == null || mensaje.isBlank()
+                ? actual.getClass().getName()
+                : mensaje.strip();
+        // Las respuestas multilínea del servidor se aplanan para no romper el log JSON.
+        descripcion = descripcion.replaceAll("\\s+", " ");
+        return descripcion.length() > 300 ? descripcion.substring(0, 300) + "…" : descripcion;
     }
 }

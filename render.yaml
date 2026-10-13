@@ -30,11 +30,31 @@ services:
         sync: false
       - key: APP_CORS_ALLOWED_ORIGINS
         sync: false
-      # Proveedor SMTP real (Mailpit solo sirve en desarrollo).
+      # Proveedor SMTP real. Mailpit (localhost:1025) solo existe en desarrollo:
+      # dentro del contenedor no hay nada escuchando ahí, así que apuntar a
+      # localhost no falla al arrancar, falla al enviar —y en silencio, porque
+      # NotificadorVerificacionCuenta registra el fallo y no revierte el registro.
+      #
+      # ATENCIÓN: estos servicios NO se crearon desde este blueprint, así que los
+      # valores del panel de Render son los que manda y este archivo no los
+      # sobreescribe. El 2026-10-13 se encontró la deriva: acá decía MAIL_PORT 587
+      # y producción corría 1025 con MAIL_HOST localhost. Nadie lo notó porque
+      # nada compara las dos cosas. Si cambiás algo acá, cambialo también en el
+      # panel hasta que los servicios se adopten en el blueprint.
+      # OJO con el nombre: tiene que ser el de sendinblue, no el de brevo.
+      # El certificado que sirve smtp-relay.brevo.com:587 vale solo para
+      # smtp-relay-offshore-southamerica-east-v2.sendinblue.com y
+      # smtp-relay.sendinblue.com. El nombre nuevo NO está en el certificado, así
+      # que cualquier cliente que valide el nombre durante STARTTLS —Java lo hace—
+      # corta el handshake antes de autenticar. El síntoma es MailSendException y
+      # cero eventos del lado de Brevo, porque la sesión nunca llega a enviar.
+      # Verificado el 2026-10-13 contra la misma IP (1.179.117.2) con los dos
+      # nombres: sendinblue autentica y acepta el mensaje, brevo falla el TLS.
       - key: MAIL_HOST
-        sync: false
+        value: smtp-relay.sendinblue.com
       - key: MAIL_PORT
         value: "587"
+      # Credenciales SMTP del proveedor: se ponen a mano, nunca en el repositorio.
       - key: MAIL_USERNAME
         sync: false
       - key: MAIL_PASSWORD
@@ -43,6 +63,8 @@ services:
         value: "true"
       - key: MAIL_SMTP_STARTTLS
         value: "true"
+      # Debe ser un remitente verificado en el proveedor. Un dominio que no
+      # controlamos (por ejemplo reservaya.app) hace que el envío se rechace.
       - key: APP_MAIL_FROM
         sync: false
       - key: JWT_EXPIRATION
