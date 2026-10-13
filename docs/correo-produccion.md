@@ -90,6 +90,41 @@ La lección: los valores de desarrollo no son neutros. `false` y `false` eran
 correctos para Mailpit y son veneno para un relay real, y no fallan al arrancar
 —fallan al enviar, en silencio.
 
+### El remitente NO puede ser `@udea.edu.co` (DMARC)
+
+Con el host correcto, el relay acepta el mensaje y **Google lo rebota**:
+
+```
+softBounces  to=isaac.mesag+smtptest@udea.edu.co
+550-5.7.26 Unauthenticated email from udea.edu.co is not accepted
+           due to domain's DMARC policy.
+```
+
+La causa está en el DNS de la universidad:
+
+```
+_dmarc.udea.edu.co  "v=DMARC1; p=reject; pct=100; sp=reject; aspf=r; ..."
+udea.edu.co         "v=spf1 include:_spf.google.com ... -all"
+```
+
+`p=reject` con `pct=100` significa que la universidad pide que se **rechace todo**
+el correo que diga venir de `@udea.edu.co` sin estar autenticado para ese dominio,
+y su SPF termina en `-all` sin incluir a Brevo. Brevo firma con su propio dominio,
+así que la alineación DMARC falla y Gmail cumple la instrucción.
+
+**No hay nada que configurar de nuestro lado.** Esa política existe justamente para
+que nadie pueda enviar correo haciéndose pasar por la universidad, y nosotros
+estábamos haciendo exactamente eso sin querer.
+
+Opciones, de la más rápida a la más correcta:
+
+| Opción | Qué implica | Para qué sirve |
+|--------|-------------|----------------|
+| Remitente en Gmail | `_dmarc.gmail.com` es `p=none`, así que no se rechaza. Verificar la dirección en Brevo y usarla en `APP_MAIL_FROM`. | Demostración y desarrollo. Puede caer en spam. |
+| Dominio propio autenticado | Registrar un dominio y cargar en su DNS los registros DKIM y SPF que da Brevo. | La solución de verdad, y la que permite un `no-reply@…` presentable. |
+
+Lo que **no** es una opción es pedirle a la universidad que agregue Brevo a su SPF.
+
 ### El nombre del relay: `sendinblue`, no `brevo`
 
 Brevo documenta `smtp-relay.brevo.com`, y **ese nombre no funciona** con un
