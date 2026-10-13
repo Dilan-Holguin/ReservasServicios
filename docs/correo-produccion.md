@@ -90,6 +90,31 @@ La lección: los valores de desarrollo no son neutros. `false` y `false` eran
 correctos para Mailpit y son veneno para un relay real, y no fallan al arrancar
 —fallan al enviar, en silencio.
 
+### La lista blanca de IPs de Brevo
+
+Con las siete variables correctas, el envío seguía fallando con
+`MailSendException`. La causa no estaba en la configuración del servicio sino en
+la cuenta de Brevo: **tiene restricción por IP activada de fábrica** y solo
+confía en la dirección desde la que se creó la cuenta.
+
+La respuesta de Brevo lo dice sin rodeos:
+
+```
+401 {"message":"We have detected you are using an unrecognised IP address ...
+     make sure to add the new IP address in this link:
+     https://app.brevo.com/security/authorised_ips","code":"unauthorized"}
+```
+
+El contenedor de Render sale por una IP distinta, así que el relay rechaza la
+conexión antes de aceptar el mensaje.
+
+**La solución es desactivar la restricción, no listar las IPs.** En el plan
+gratuito de Render las direcciones de salida son compartidas: la propia API lo
+informa como `{"type": "shared"}` sin devolver ninguna lista, y las IPs estáticas
+son una función de pago. No hay un conjunto estable que agregar.
+
+En **Brevo → Security → Authorised IPs** hay que desactivar la restricción.
+
 ### Distinguir las dos credenciales de Brevo
 
 Es el otro error fácil. Brevo entrega claves con prefijos distintos:
