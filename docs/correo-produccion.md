@@ -70,11 +70,38 @@ evaluador se registra con su propio correo.
 | `APP_MAIL_FROM` | el remitente verificado en el paso 2 |
 
 Guardar reinicia el servicio. En el plan gratuito el arranque tarda cerca de tres
-minutos.
+minutos, así que conviene cambiar las siete variables en **un solo guardado**.
 
-> `APP_MAIL_FROM` no puede ser una dirección de un dominio que no controlemos. El
-> valor que había, `no-reply@reservaya.app`, es de un dominio ajeno y ningún
-> proveedor serio lo deja salir.
+### Los tres tropiezos de esta configuración
+
+Al migrar de Mailpit a Brevo se cambiaron el host y el puerto, se agregaron las
+credenciales… y quedaron tres cosas atrás. Vale anotarlas porque las tres dan el
+mismo síntoma —el correo no llega— con causas distintas:
+
+1. **`MAIL_SMTP_AUTH` seguía en `false`.** Heredado de Mailpit, que no pide
+   contraseña. Con esto en `false`, Java no envía las credenciales aunque estén
+   perfectamente cargadas, y el relay corta la conexión.
+2. **`MAIL_SMTP_STARTTLS` seguía en `false`.** También heredado. Brevo en el
+   puerto 587 exige STARTTLS y rechaza antes de llegar a la autenticación.
+3. **`APP_MAIL_FROM` seguía en `no-reply@reservaya.app`**, un dominio que no
+   controlamos. Ningún proveedor serio deja salir un remitente sin verificar.
+
+La lección: los valores de desarrollo no son neutros. `false` y `false` eran
+correctos para Mailpit y son veneno para un relay real, y no fallan al arrancar
+—fallan al enviar, en silencio.
+
+### Distinguir las dos credenciales de Brevo
+
+Es el otro error fácil. Brevo entrega claves con prefijos distintos:
+
+| Prefijo | Qué es | Sirve para |
+|---------|--------|------------|
+| `xsmtpsib-` | clave **SMTP** | `MAIL_PASSWORD`. Es la que necesita `JavaMailSender`. |
+| `xkeysib-` | clave de **API REST v3** (y la del servidor MCP, envuelta en base64) | La API HTTP de Brevo. **No** autentica por SMTP. |
+
+Y el *login* SMTP no es el correo personal: Brevo entrega uno propio, con el
+formato `xxxxxx@smtp-brevo.com`. Ese va en `MAIL_USERNAME`; el correo personal
+verificado va en `APP_MAIL_FROM`.
 
 ## Verificación de punta a punta
 
@@ -100,6 +127,12 @@ curl -sS -X POST "$API/auth/verificacion/reenvio" \
 Después buscar `CORREO_VERIFICACION_ENVIADO` en los logs **y** el correo en la
 bandeja. Las dos cosas: el evento prueba que el relay lo aceptó, la bandeja prueba
 que lo entregó.
+
+> **El reenvío no sirve para probar sobre una cuenta ya activa.**
+> `ReenviarVerificacionService` filtra por `estado == PENDIENTE_VERIFICACION`, así
+> que pedirlo para una cuenta `ACTIVO` no envía nada y tampoco deja evento en el
+> log. Y responde `200` igual, porque a propósito no revela si el correo existe.
+> Para probar el envío hay que **registrar una cuenta nueva**.
 
 ## Por qué no se puede activar una cuenta a mano sin tocar la base
 
