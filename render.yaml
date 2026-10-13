@@ -52,8 +52,13 @@ services:
       # nombres: sendinblue autentica y acepta el mensaje, brevo falla el TLS.
       - key: MAIL_HOST
         value: smtp-relay.sendinblue.com
+      # 2525 y NO 587. Render no deja salir el 587 desde el contenedor: la
+      # conexión TCP ni se establece y el log queda en «Connect timed out», sin
+      # que Brevo registre un solo intento. 2525 es el mismo relay, el mismo
+      # certificado y la misma secuencia STARTTLS, y sí pasa. Verificado el
+      # 2026-10-13: con 587 el envío falla, con 2525 Brevo reporta «delivered».
       - key: MAIL_PORT
-        value: "587"
+        value: "2525"
       # Credenciales SMTP del proveedor: se ponen a mano, nunca en el repositorio.
       - key: MAIL_USERNAME
         sync: false

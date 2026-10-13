@@ -62,7 +62,7 @@ evaluador se registra con su propio correo.
 | Variable | Valor |
 |----------|-------|
 | `MAIL_HOST` | `smtp-relay.sendinblue.com` ← **no** `smtp-relay.brevo.com`, ver abajo |
-| `MAIL_PORT` | `587` |
+| `MAIL_PORT` | `2525` ← **no** `587`, Render lo bloquea; ver abajo |
 | `MAIL_SMTP_AUTH` | `true` |
 | `MAIL_SMTP_STARTTLS` | `true` |
 | `MAIL_USERNAME` | el login SMTP de Brevo |
