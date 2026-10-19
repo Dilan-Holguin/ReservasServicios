@@ -23,8 +23,8 @@
         <jacoco.version>0.8.15</jacoco.version>
         <jacoco.minimo.lineas>0.65</jacoco.minimo.lineas>
         <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
-        <sonar.projectKey>PROJECT_KEY_PENDIENTE</sonar.projectKey>
-        <sonar.organization>ORGANIZATION_KEY_PENDIENTE</sonar.organization>
+        <sonar.projectKey>Satshman_ReservasServicios</sonar.projectKey>
+        <sonar.organization>hoqanu67</sonar.organization>
         <sonar.coverage.jacoco.xmlReportPaths>${project.basedir}/target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <sonar.coverage.exclusions>co/reservas/infrastructure/ReservasServiciosApplication.java,co/reservas/infrastructure/config/**</sonar.coverage.exclusions>
         <sonar.junit.reportPaths>target/surefire-reports</sonar.junit.reportPaths>
